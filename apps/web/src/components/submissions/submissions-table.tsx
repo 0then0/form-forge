@@ -12,6 +12,8 @@ import { Download } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import { readApiData } from "@/lib/client-api";
+
 type SubmissionRow = {
   createdAt: string;
   deliveryStatus: "pending" | "processing" | "succeeded" | "failed";
@@ -55,14 +57,10 @@ export const SubmissionsTable = ({
       const response = await fetch(
         `/api/admin/workspaces/${workspaceSlug}/submissions?${params}`,
       );
-      const body = (await response.json()) as {
-        data?: SubmissionPage;
-        error?: { message: string };
-      };
-      if (!response.ok || !body.data) {
-        throw new Error(body.error?.message ?? "Could not load submissions");
-      }
-      return body.data;
+      return readApiData<SubmissionPage>(
+        response,
+        "Could not load submissions",
+      );
     },
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     queryKey: ["submissions", workspaceSlug, formId, status],
@@ -106,7 +104,11 @@ export const SubmissionsTable = ({
         header: "Delivery",
       }),
       columnHelper.accessor("createdAt", {
-        cell: (cell) => new Date(cell.getValue()).toLocaleString(),
+        cell: (cell) => (
+          <time dateTime={cell.getValue()}>
+            {new Date(cell.getValue()).toLocaleString()}
+          </time>
+        ),
         header: "Received",
       }),
     ],

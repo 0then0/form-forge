@@ -27,15 +27,15 @@ const features = [
 export default function MarketingPage() {
   return (
     <main>
-      <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
+      <nav className="mx-auto flex max-w-6xl items-center justify-between gap-2 px-4 py-4 sm:px-6 sm:py-6">
         <Link
           href="/"
-          className="flex items-center gap-2 font-semibold tracking-tight text-slate-950"
+          className="flex shrink-0 items-center gap-2 font-semibold tracking-tight whitespace-nowrap text-slate-950"
         >
           <BrandMark />
           <span>Form Forge</span>
         </Link>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <ThemeToggle />
           <Button asChild variant="secondary" size="sm">
             <Link href="/login">Sign in</Link>

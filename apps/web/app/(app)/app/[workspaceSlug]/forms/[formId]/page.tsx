@@ -22,7 +22,7 @@ export default async function FormEditorPage({
       initialDraftRevision={form.updatedAt.toISOString()}
       initialSchema={form.draftSchema}
       publicSlug={form.slug}
-      publicBaseUrl={env.NEXT_PUBLIC_APP_URL}
+      publicBaseUrl={env.APP_URL.replace(/\/$/, "")}
       published={form.status === "published"}
       versions={versions.map((version) => ({
         id: version.id,

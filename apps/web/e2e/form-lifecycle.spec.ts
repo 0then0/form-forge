@@ -60,79 +60,66 @@ test.afterAll(async () => {
 test("creates, publishes, submits, fails, retries, and succeeds", async ({
   page,
 }) => {
-  const baseUrl = new URL(
-    process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
-  );
   await page.context().addCookies([
     {
-      domain: baseUrl.hostname,
+      domain: "localhost",
       expires: Math.floor(Date.now() / 1_000) + 3_600,
       httpOnly: true,
       name: "next-auth.session-token",
       path: "/",
       sameSite: "Lax",
-      secure: baseUrl.protocol === "https:",
+      secure: false,
       value: sessionToken,
     },
   ]);
 
   const name = `Playwright form ${Date.now()}`;
-  const createdResponse = await page.request.post(
-    `/api/admin/workspaces/${workspaceSlug}/forms`,
-    { data: { name } },
+  await page.goto(`/app/${workspaceSlug}/forms`);
+  await page.getByRole("button", { name: "New form" }).first().click();
+  await page.getByLabel("Name").fill(name);
+  await page.getByRole("button", { name: "Create form" }).click();
+  await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+  const formId = page.url().split("/forms/")[1];
+  if (!formId) throw new Error("Editor URL did not contain the form ID");
+
+  await page.getByRole("button", { name: "Add field" }).click();
+  await page.getByLabel("Label").fill("Name");
+  await page.getByLabel("Key", { exact: true }).fill("name");
+  await page.getByLabel("Required").check();
+  page.once("dialog", (dialog) => dialog.accept());
+  const publishedResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith(`/forms/${formId}/publish`),
   );
-  expect(createdResponse.status()).toBe(201);
-  const created = (await createdResponse.json()) as {
-    data: { id: string; slug: string; updatedAt: string };
-  };
-  const schema = {
-    fields: [
-      {
-        id: crypto.randomUUID(),
-        key: "name",
-        label: "Name",
-        required: true,
-        type: "shortText",
-        width: "full",
-      },
-    ],
-    schemaVersion: 1,
-    settings: {
-      submitLabel: "Submit",
-      successMessage: "Your response has been received.",
-      successTitle: "Thank you",
-    },
-    title: name,
-  };
-  const publishedResponse = await page.request.post(
-    `/api/admin/workspaces/${workspaceSlug}/forms/${created.data.id}/publish`,
-    {
-      data: {
-        expectedRevision: created.data.updatedAt,
-        schema,
-      },
-    },
-  );
+  await page.getByRole("button", { name: "Publish" }).click();
+  const publishedResponse = await publishedResponsePromise;
   expect(publishedResponse.status()).toBe(201);
   const published = (await publishedResponse.json()) as {
     data: { id: string };
   };
+  const formRow = await pool.query<{ slug: string }>(
+    "select slug from forms where id = $1",
+    [formId],
+  );
+  const formSlug = formRow.rows[0]?.slug;
+  if (!formSlug) throw new Error("Published form slug was not found");
 
   const endpointResponse = await page.request.post(
     "/api/internal/e2e/pipeline",
     {
-      data: { action: "create-endpoint", formId: created.data.id },
+      data: { action: "create-endpoint", formId },
       headers: { "x-form-forge-e2e-token": pipelineToken },
     },
   );
   expect(endpointResponse.status()).toBe(201);
 
-  await page.goto(`/f/${created.data.slug}`);
+  await page.goto(`/f/${formSlug}`);
   await page.getByRole("textbox", { name: "Name" }).fill("Ada Lovelace");
   const submissionResponsePromise = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
-      response.url().includes(`/api/forms/${created.data.slug}/submit`),
+      response.url().includes(`/api/forms/${formSlug}/submit`),
   );
   await page.getByRole("button", { name: "Submit" }).click();
   const submissionResponse = await submissionResponsePromise;
@@ -208,21 +195,15 @@ test("creates, publishes, submits, fails, retries, and succeeds", async ({
   await page.reload();
   await expect(page.getByText("succeeded").first()).toBeVisible();
 
-  const duplicate = await page.request.post(
-    `/api/forms/${created.data.slug}/submit`,
-    {
-      data: { values: { name: "Ada Lovelace" }, versionId: published.data.id },
-      headers: { "Idempotency-Key": "playwright-duplicate" },
-    },
-  );
+  const duplicate = await page.request.post(`/api/forms/${formSlug}/submit`, {
+    data: { values: { name: "Ada Lovelace" }, versionId: published.data.id },
+    headers: { "Idempotency-Key": "playwright-duplicate" },
+  });
   expect(duplicate.status()).toBe(201);
-  const repeated = await page.request.post(
-    `/api/forms/${created.data.slug}/submit`,
-    {
-      data: { values: { name: "Ada Lovelace" }, versionId: published.data.id },
-      headers: { "Idempotency-Key": "playwright-duplicate" },
-    },
-  );
+  const repeated = await page.request.post(`/api/forms/${formSlug}/submit`, {
+    data: { values: { name: "Ada Lovelace" }, versionId: published.data.id },
+    headers: { "Idempotency-Key": "playwright-duplicate" },
+  });
   expect(repeated.status()).toBe(200);
   await expect(repeated.json()).resolves.toMatchObject({
     data: { duplicate: true },

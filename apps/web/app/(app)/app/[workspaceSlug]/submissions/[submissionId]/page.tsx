@@ -1,9 +1,10 @@
 import { formSchemaV1Schema } from "@form-forge/form-schema";
-import { Badge, Card, CardContent, CardHeader } from "@form-forge/ui";
+import { Alert, Badge, Card, CardContent, CardHeader } from "@form-forge/ui";
 import Link from "next/link";
 
 import { canEdit, requireWorkspace } from "@/auth/permissions";
 import { RetryButton } from "@/components/deliveries/retry-button";
+import { formatUtcDateTime } from "@/lib/date-time";
 import { getSubmissionDetail } from "@/services/submissions";
 
 const statusTone = {
@@ -43,13 +44,22 @@ export default async function SubmissionDetailPage({
           </h1>
           <p className="mt-1 text-sm text-slate-600">
             Version {detail.submission.versionNumber} ·{" "}
-            {detail.submission.createdAt.toLocaleString()}
+            <time dateTime={detail.submission.createdAt.toISOString()}>
+              {formatUtcDateTime(detail.submission.createdAt)}
+            </time>
           </p>
         </div>
         <Badge tone={statusTone[detail.submission.deliveryStatus]}>
           {detail.submission.deliveryStatus}
         </Badge>
       </div>
+
+      {detail.historyTruncated ? (
+        <Alert className="mt-4" tone="info">
+          This submission has more than 200 history records. The newest records
+          are shown.
+        </Alert>
+      ) : null}
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-6">
@@ -207,8 +217,11 @@ export default async function SubmissionDetailPage({
                 {detail.events.map((event) => (
                   <li key={event.id}>
                     <p className="text-sm font-medium">{event.type}</p>
-                    <time className="text-xs text-slate-500">
-                      {event.createdAt.toLocaleString()}
+                    <time
+                      className="text-xs text-slate-500"
+                      dateTime={event.createdAt.toISOString()}
+                    >
+                      {formatUtcDateTime(event.createdAt)}
                     </time>
                   </li>
                 ))}

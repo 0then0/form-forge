@@ -1,6 +1,17 @@
 import "server-only";
 
-import { and, desc, eq, isNull, lt, lte, or, sql, type SQL } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import { createHmac } from "node:crypto";
 
 import { requireWorkspace } from "@/auth/permissions";
@@ -53,7 +64,10 @@ const encodeDeliveryCursor = ({ id, updatedAt }: DeliveryCursor): string =>
     JSON.stringify({ id, updatedAt: updatedAt.toISOString() }),
   ).toString("base64url");
 
-export const createDeliveriesForSubmission = async (submissionId: string) =>
+export const createDeliveriesForSubmission = async (
+  submissionId: string,
+  endpointIds?: string[],
+) =>
   db.transaction(async (tx) => {
     const [submission] = await tx
       .select({ formId: submissions.formId, id: submissions.id })
@@ -62,16 +76,24 @@ export const createDeliveriesForSubmission = async (submissionId: string) =>
       .limit(1);
     if (!submission) throw notFoundError("Submission not found");
 
-    const endpoints = await tx
-      .select({ id: webhookEndpoints.id })
-      .from(webhookEndpoints)
-      .where(
-        and(
-          eq(webhookEndpoints.formId, submission.formId),
-          eq(webhookEndpoints.enabled, true),
-          sql`${webhookEndpoints.archivedAt} is null`,
-        ),
-      );
+    const endpoints =
+      endpointIds?.length === 0
+        ? []
+        : await tx
+            .select({ id: webhookEndpoints.id })
+            .from(webhookEndpoints)
+            .where(
+              endpointIds
+                ? and(
+                    eq(webhookEndpoints.formId, submission.formId),
+                    inArray(webhookEndpoints.id, endpointIds),
+                  )
+                : and(
+                    eq(webhookEndpoints.formId, submission.formId),
+                    eq(webhookEndpoints.enabled, true),
+                    isNull(webhookEndpoints.archivedAt),
+                  ),
+            );
 
     const createdDeliveries = endpoints.length
       ? await tx
@@ -427,6 +449,17 @@ export const deliverWebhook = async (
         submissionId: record.submissionId,
         type: "delivery.succeeded",
       });
+      if (claimed.manualRetryCount > 0) {
+        await tx.insert(submissionEvents).values({
+          data: {
+            attemptNumber,
+            deliveryId,
+            manualRetryCount: claimed.manualRetryCount,
+          },
+          submissionId: record.submissionId,
+          type: "delivery.retry_completed",
+        });
+      }
       await updateSubmissionDeliveryStatus(tx, record.submissionId);
     });
     return { skipped: false, success: true };

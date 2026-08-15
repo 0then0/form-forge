@@ -5,6 +5,8 @@ import { Archive } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { readApiData } from "@/lib/client-api";
+
 export const ArchiveFormButton = ({
   disabled,
   formId,
@@ -33,7 +35,7 @@ export const ArchiveFormButton = ({
         `/api/admin/workspaces/${workspaceSlug}/forms/${formId}`,
         { method: "DELETE" },
       );
-      if (!response.ok) throw new Error("Form could not be archived");
+      await readApiData(response, "Form could not be archived");
       router.push(`/app/${workspaceSlug}/forms`);
       router.refresh();
     } catch (caught) {

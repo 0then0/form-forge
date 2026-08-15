@@ -14,6 +14,8 @@ import { Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
+import { readApiData } from "@/lib/client-api";
+
 export const CreateFormButton = ({
   disabled,
   workspaceSlug,
@@ -40,15 +42,12 @@ export const CreateFormButton = ({
           method: "POST",
         },
       );
-      const body = (await response.json()) as {
-        data?: { id: string };
-        error?: { message: string };
-      };
-      if (!response.ok || !body.data) {
-        throw new Error(body.error?.message ?? "Could not create the form");
-      }
+      const created = await readApiData<{ id: string }>(
+        response,
+        "Could not create the form",
+      );
       setOpen(false);
-      router.push(`/app/${workspaceSlug}/forms/${body.data.id}`);
+      router.push(`/app/${workspaceSlug}/forms/${created.id}`);
       router.refresh();
     } catch (caught) {
       setError(

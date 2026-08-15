@@ -2,7 +2,7 @@ import { submissionRequestSchema } from "@form-forge/form-schema";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { apiError, parseJsonBody } from "@/lib/api";
+import { apiError, MAX_SUBMISSION_BODY_BYTES, parseJsonBody } from "@/lib/api";
 import { AppError } from "@/lib/errors";
 import { receiveSubmission } from "@/services/public-forms";
 
@@ -23,7 +23,9 @@ export const POST = async (
       );
     }
     const idempotencyKey = idempotencyKeySchema.parse(idempotencyHeader);
-    const input = submissionRequestSchema.parse(await parseJsonBody(request));
+    const input = submissionRequestSchema.parse(
+      await parseJsonBody(request, MAX_SUBMISSION_BODY_BYTES),
+    );
     const forwardedFor = request.headers
       .get("x-forwarded-for")
       ?.split(",")[0]

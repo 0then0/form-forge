@@ -15,6 +15,7 @@ describe("ThemeToggle", () => {
   beforeEach(() => {
     window.localStorage.clear();
     document.documentElement.classList.remove("dark");
+    delete document.documentElement.dataset.themeVolatile;
     media.matches = false;
     vi.stubGlobal(
       "matchMedia",
@@ -51,5 +52,21 @@ describe("ThemeToggle", () => {
 
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
     expect(document.documentElement).toHaveClass("dark");
+  });
+
+  it("keeps the selected state when storage writes are blocked", async () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage denied", "SecurityError");
+    });
+    const user = userEvent.setup();
+    render(<ThemeToggle />);
+
+    await user.click(screen.getByRole("button", { name: "Dark theme" }));
+
+    expect(document.documentElement).toHaveClass("dark");
+    expect(screen.getByRole("button", { name: "Dark theme" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 });

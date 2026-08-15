@@ -15,6 +15,8 @@ import {
 import { RotateCcw } from "lucide-react";
 import { useState } from "react";
 
+import { readApiData } from "@/lib/client-api";
+
 type Version = {
   id: string;
   publishedAt: string;
@@ -23,16 +25,14 @@ type Version = {
 };
 
 const compareSchemas = (version: FormSchemaV1, draft: FormSchemaV1) => {
-  const oldFields = new Map(version.fields.map((field) => [field.key, field]));
-  const draftFields = new Map(draft.fields.map((field) => [field.key, field]));
-  const added = draft.fields.filter(
-    (field) => !oldFields.has(field.key),
-  ).length;
+  const oldFields = new Map(version.fields.map((field) => [field.id, field]));
+  const draftFields = new Map(draft.fields.map((field) => [field.id, field]));
+  const added = draft.fields.filter((field) => !oldFields.has(field.id)).length;
   const removed = version.fields.filter(
-    (field) => !draftFields.has(field.key),
+    (field) => !draftFields.has(field.id),
   ).length;
   const changed = draft.fields.filter((field) => {
-    const previous = oldFields.get(field.key);
+    const previous = oldFields.get(field.id);
     return previous && JSON.stringify(previous) !== JSON.stringify(field);
   }).length;
   const formSettingsChanged =
@@ -40,8 +40,8 @@ const compareSchemas = (version: FormSchemaV1, draft: FormSchemaV1) => {
     version.description !== draft.description ||
     JSON.stringify(version.settings) !== JSON.stringify(draft.settings);
   const orderChanged =
-    JSON.stringify(version.fields.map((field) => field.key)) !==
-    JSON.stringify(draft.fields.map((field) => field.key));
+    JSON.stringify(version.fields.map((field) => field.id)) !==
+    JSON.stringify(draft.fields.map((field) => field.id));
   return { added, changed, formSettingsChanged, orderChanged, removed };
 };
 
@@ -87,21 +87,15 @@ export const VersionHistory = ({
           method: "POST",
         },
       );
-      const body = (await response.json()) as {
-        data?: {
-          draftRevision: string;
-          draftSchema: FormSchemaV1;
-          versionNumber: number;
-        };
-        error?: { message: string };
-      };
-      if (!response.ok || !body.data) {
-        throw new Error(body.error?.message ?? "Could not restore version");
-      }
+      const restored = await readApiData<{
+        draftRevision: string;
+        draftSchema: FormSchemaV1;
+        versionNumber: number;
+      }>(response, "Could not restore version");
       onRestore(
-        body.data.draftSchema,
-        body.data.versionNumber,
-        body.data.draftRevision,
+        restored.draftSchema,
+        restored.versionNumber,
+        restored.draftRevision,
       );
     } catch (caught) {
       setError(
@@ -136,7 +130,10 @@ export const VersionHistory = ({
                       <div className="font-medium">
                         Version {version.versionNumber}
                       </div>
-                      <time className="text-xs text-slate-500">
+                      <time
+                        className="text-xs text-slate-500"
+                        dateTime={version.publishedAt}
+                      >
                         {new Date(version.publishedAt).toLocaleString()}
                       </time>
                     </div>

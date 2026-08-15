@@ -6,7 +6,7 @@ import {
   submissionRequestSchema,
   type SubmissionRequest,
 } from "@form-forge/form-schema";
-import { and, count, eq, gt } from "drizzle-orm";
+import { and, count, eq, gt, isNull, sql } from "drizzle-orm";
 import { createHmac } from "node:crypto";
 
 import { db } from "@/db/client";
@@ -16,6 +16,7 @@ import {
   outboxEvents,
   submissionEvents,
   submissions,
+  webhookEndpoints,
 } from "@/db/schema";
 import { env } from "@/env";
 import { AppError, notFoundError } from "@/lib/errors";
@@ -63,10 +64,13 @@ export const getPublishedForm = async (slug: string, versionId?: string) => {
   };
 };
 
-const enforceSubmissionRate = async (fingerprintHash: string | null) => {
+const enforceSubmissionRate = async (
+  executor: Pick<typeof db, "select">,
+  fingerprintHash: string | null,
+) => {
   if (!fingerprintHash) return;
   const since = new Date(Date.now() - 10 * 60 * 1_000);
-  const [result] = await db
+  const [result] = await executor
     .select({ value: count() })
     .from(submissions)
     .where(
@@ -114,8 +118,10 @@ export const receiveSubmission = async ({
     );
   }
 
+  // Prefer the proxy-provided address. visitorId is only a fallback because it
+  // is controlled by the public client and can be rotated by a caller.
   const fingerprintSource =
-    parsedInput.context?.visitorId ?? fallbackFingerprint;
+    fallbackFingerprint ?? parsedInput.context?.visitorId;
   const fingerprintHash = fingerprintSource
     ? hashFingerprint(fingerprintSource)
     : null;
@@ -149,8 +155,6 @@ export const receiveSubmission = async ({
     return { id: previous.id, duplicate: true };
   }
 
-  await enforceSubmissionRate(fingerprintHash);
-
   const utm = Object.fromEntries(
     Object.entries(parsedInput.context?.utm ?? {}).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
@@ -158,6 +162,43 @@ export const receiveSubmission = async ({
   );
 
   return db.transaction(async (tx) => {
+    if (fingerprintHash) {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${fingerprintHash}, 0))`,
+      );
+    }
+
+    const [existingSubmission] = await tx
+      .select({
+        formVersionId: submissions.formVersionId,
+        id: submissions.id,
+        receivedValues: submissions.receivedValues,
+      })
+      .from(submissions)
+      .where(
+        and(
+          eq(submissions.formId, published.form.id),
+          eq(submissions.idempotencyKey, idempotencyKey),
+        ),
+      )
+      .limit(1);
+    if (existingSubmission) {
+      if (
+        existingSubmission.formVersionId !== published.version.id ||
+        JSON.stringify(existingSubmission.receivedValues) !==
+          JSON.stringify(normalized.receivedValues)
+      ) {
+        throw new AppError(
+          "CONFLICT",
+          "This idempotency key was already used for a different submission",
+          409,
+        );
+      }
+      return { id: existingSubmission.id, duplicate: true };
+    }
+
+    await enforceSubmissionRate(tx, fingerprintHash);
+
     const [created] = await tx
       .insert(submissions)
       .values({
@@ -213,9 +254,22 @@ export const receiveSubmission = async ({
       submissionId: created.id,
       type: "submission.received",
     });
+    const endpointIds = await tx
+      .select({ id: webhookEndpoints.id })
+      .from(webhookEndpoints)
+      .where(
+        and(
+          eq(webhookEndpoints.formId, published.form.id),
+          eq(webhookEndpoints.enabled, true),
+          isNull(webhookEndpoints.archivedAt),
+        ),
+      );
     await tx.insert(outboxEvents).values({
       aggregateId: created.id,
-      payload: { submissionId: created.id },
+      payload: {
+        endpointIds: endpointIds.map((endpoint) => endpoint.id),
+        submissionId: created.id,
+      },
       type: "submission.received",
     });
 

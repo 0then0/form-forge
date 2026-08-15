@@ -67,8 +67,11 @@ export default async function FormsPage({
                   >
                     {form.status}
                   </Badge>
-                  <time className="hidden text-sm text-slate-500 sm:block">
-                    {form.updatedAt.toLocaleDateString()}
+                  <time
+                    className="hidden text-sm text-slate-500 sm:block"
+                    dateTime={form.updatedAt.toISOString()}
+                  >
+                    {form.updatedAt.toISOString().slice(0, 10)} UTC
                   </time>
                 </Link>
               </li>

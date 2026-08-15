@@ -75,6 +75,90 @@ describe("FormSchemaV1", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects whitespace-only required text and omits absent optional values", () => {
+    const company = schema.fields[1];
+    if (!company) throw new Error("Expected the company field");
+    const { visibility: _visibility, ...alwaysVisibleCompany } = company;
+    const result = normalizeSubmission(
+      {
+        ...schema,
+        fields: [
+          alwaysVisibleCompany,
+          {
+            id: "55555555-5555-4555-8555-555555555555",
+            key: "consent",
+            label: "Consent",
+            required: false,
+            type: "checkbox",
+            width: "full",
+          },
+        ],
+      },
+      { company: "   " },
+    );
+
+    expect(result).toEqual({
+      errors: [{ field: "company", message: "This field is required" }],
+      success: false,
+    });
+    expect(
+      normalizeSubmission(
+        {
+          ...schema,
+          fields: [
+            {
+              id: "55555555-5555-4555-8555-555555555555",
+              key: "consent",
+              label: "Consent",
+              required: false,
+              type: "checkbox",
+              width: "full",
+            },
+          ],
+        },
+        {},
+      ),
+    ).toEqual({ normalizedValues: {}, receivedValues: {}, success: true });
+  });
+
+  it("does not let a hidden stale value reveal a later field", () => {
+    const contactReason = schema.fields[0];
+    const company = schema.fields[1];
+    if (!contactReason || !company) throw new Error("Expected schema fields");
+    const chainedSchema: FormSchemaV1 = {
+      ...schema,
+      fields: [
+        contactReason,
+        company,
+        {
+          id: "55555555-5555-4555-8555-555555555555",
+          key: "company_size",
+          label: "Company size",
+          required: true,
+          type: "shortText",
+          visibility: {
+            fieldKey: "company",
+            operator: "equals",
+            value: "Form Forge",
+          },
+          width: "full",
+        },
+      ],
+    };
+
+    expect(
+      normalizeSubmission(chainedSchema, {
+        company: "Form Forge",
+        company_size: "10",
+        contact_reason: "support",
+      }),
+    ).toEqual({
+      normalizedValues: { contact_reason: "support" },
+      receivedValues: { contact_reason: "support" },
+      success: true,
+    });
+  });
+
   it("keeps number visibility typed consistently", () => {
     const numberSchema: FormSchemaV1 = {
       ...schema,

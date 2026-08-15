@@ -146,10 +146,12 @@ pnpm test:e2e
 
 Playwright applies all migrations and truncates this database before and after
 the scenario. Never point `TEST_DATABASE_URL` at development or production.
-The browser test covers create, atomic publish, hosted submit, failure
+The browser test covers UI create and publish, hosted submit, failure
 diagnostics, manual retry, success, and idempotent submission. The integration
-suite separately exercises the real outbox, lease, signature, timeout, HTTP
-failure, and webhook transport code.
+suite separately exercises the PostgreSQL outbox and leases, signatures,
+injected timeout and HTTP failure results, automatic retries, and manual
+recovery. URL resolution and private-address blocking are covered by focused
+unit tests; no test sends a webhook to an external service.
 
 ### PostgreSQL integration tests
 
@@ -175,6 +177,9 @@ and manual retries, version restore, endpoint lifecycle, and CSV export safety.
 - `POST /api/forms/:slug/submit` accepts `{ versionId, values, context }` and requires an `Idempotency-Key` header.
 - Hosted forms are available at `/f/:slug`; append `?embed=1` for the iframe layout.
 
+A version that was published for a form remains valid for submissions from an
+already-open hosted page. A version belonging to another form is rejected.
+
 Webhook requests use a versioned JSON envelope and these headers:
 
 ```txt
@@ -184,6 +189,10 @@ X-Form-Forge-Signature: v1=<hex hmac-sha256>
 ```
 
 The signature input is `<timestamp>.<raw-body>`. Endpoint secrets are shown once and stored with AES-256-GCM encryption.
+
+Submission throttling prefers the address from `X-Forwarded-For` over the
+client-generated visitor ID. In a deployment, the reverse proxy must overwrite
+this header rather than forwarding a value supplied by the caller.
 
 ## Access model
 

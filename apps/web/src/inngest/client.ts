@@ -3,7 +3,7 @@ import { eventType, Inngest, staticSchema } from "inngest";
 import { env } from "@/env";
 
 export const submissionReceived = eventType("form-forge/submission.received", {
-  schema: staticSchema<{ submissionId: string }>(),
+  schema: staticSchema<{ endpointIds?: string[]; submissionId: string }>(),
 });
 
 export const deliveryRequested = eventType("form-forge/delivery.requested", {

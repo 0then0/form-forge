@@ -48,7 +48,7 @@ export const FormRenderer = ({
     handleSubmit,
     register,
     setError,
-  } = useForm<FormValues>({ defaultValues: {} });
+  } = useForm<FormValues>({ defaultValues: {}, shouldUnregister: true });
   const watched = useWatch({ control });
   const watchedValues: Record<string, unknown> = { ...watched };
 

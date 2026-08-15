@@ -4,6 +4,8 @@ import { Alert, Button, Input, Label } from "@form-forge/ui";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
+import { readApiData } from "@/lib/client-api";
+
 export const CreateWebhookForm = ({
   disabled,
   formId,
@@ -34,14 +36,11 @@ export const CreateWebhookForm = ({
           method: "POST",
         },
       );
-      const body = (await response.json()) as {
-        data?: { secret: string };
-        error?: { message: string };
-      };
-      if (!response.ok || !body.data) {
-        throw new Error(body.error?.message ?? "Could not create endpoint");
-      }
-      setSecret(body.data.secret);
+      const created = await readApiData<{ secret: string }>(
+        response,
+        "Could not create endpoint",
+      );
+      setSecret(created.secret);
       setName("");
       setUrl("");
       router.refresh();

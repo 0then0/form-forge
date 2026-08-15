@@ -17,6 +17,7 @@ const valueIsMissing = (value: unknown): boolean =>
   value === undefined ||
   value === null ||
   value === "" ||
+  (typeof value === "string" && value.trim() === "") ||
   (typeof value === "number" && Number.isNaN(value));
 
 const validateField = (
@@ -156,7 +157,10 @@ export const normalizeSubmission = (
   const normalizedValues: Record<string, NormalizedSubmissionValue> = {};
 
   for (const field of schema.fields) {
-    if (!isFieldVisible(field, values)) continue;
+    // Visibility is evaluated against values from visible, valid earlier fields.
+    // This prevents a hidden field supplied by a stale UI or direct API call from
+    // controlling later fields.
+    if (!isFieldVisible(field, receivedValues)) continue;
 
     const value = values[field.key];
     const validated = validateField(field, value);
@@ -165,7 +169,7 @@ export const normalizeSubmission = (
       continue;
     }
 
-    if (!valueIsMissing(value) || field.type === "checkbox") {
+    if (!valueIsMissing(value)) {
       receivedValues[field.key] = validated;
       normalizedValues[field.webhookKey ?? field.key] = validated;
     }

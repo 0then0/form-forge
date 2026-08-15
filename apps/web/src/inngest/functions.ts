@@ -15,7 +15,10 @@ export const processSubmission = inngest.createFunction(
   },
   async ({ event, step }) => {
     const deliveryCount = await step.run("create-deliveries", () =>
-      createDeliveriesForSubmission(event.data.submissionId),
+      createDeliveriesForSubmission(
+        event.data.submissionId,
+        event.data.endpointIds,
+      ),
     );
     return { deliveryCount };
   },

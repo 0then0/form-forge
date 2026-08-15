@@ -12,6 +12,7 @@ import { useRef, useState } from "react";
 
 import { webRendererComponents } from "@/components/renderer-adapter";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { readApiData } from "@/lib/client-api";
 
 const utmKeys = [
   "utm_source",
@@ -74,14 +75,10 @@ export const HostedForm = ({
       },
       method: "POST",
     });
-    const body = (await response.json()) as {
-      error?: { message: string };
-    };
-    if (!response.ok) {
-      throw new Error(
-        body.error?.message ?? "Your response could not be submitted",
-      );
-    }
+    await readApiData<{ submissionId: string }>(
+      response,
+      "Your response could not be submitted",
+    );
     setSubmitted(true);
   };
 

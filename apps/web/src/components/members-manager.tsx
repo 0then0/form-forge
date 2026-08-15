@@ -13,6 +13,8 @@ import {
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
+import { readApiData } from "@/lib/client-api";
+
 type Role = "owner" | "editor" | "viewer";
 type Member = {
   email: string | null;
@@ -55,9 +57,7 @@ export const MembersManager = ({
           method,
         },
       );
-      const result = (await response.json()) as { error?: { message: string } };
-      if (!response.ok)
-        throw new Error(result.error?.message ?? "Membership update failed");
+      await readApiData(response, "Membership update failed");
       setEmail("");
       router.refresh();
     } catch (caught) {

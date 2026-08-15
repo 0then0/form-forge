@@ -13,6 +13,11 @@ type ErrorBody = {
   };
 };
 
+// These limits cover the domain maxima even when JSON uses six-byte Unicode
+// escapes, while still bounding memory before parsing.
+export const MAX_FORM_SCHEMA_BODY_BYTES = 16_000_000;
+export const MAX_SUBMISSION_BODY_BYTES = 8_000_000;
+
 const zodFieldErrors = (error: ZodError): Record<string, string[]> => {
   const fields: Record<string, string[]> = {};
   for (const issue of error.issues) {

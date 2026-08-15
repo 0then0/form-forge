@@ -7,6 +7,7 @@ import {
 } from "@form-forge/form-schema";
 import { and, desc, eq, max, ne } from "drizzle-orm";
 import { createHash } from "node:crypto";
+import { cache } from "react";
 import { z } from "zod";
 
 import { requireWorkspace } from "@/auth/permissions";
@@ -89,7 +90,7 @@ export const createForm = async (workspaceSlug: string, name: string) => {
   });
 };
 
-export const getForm = async (workspaceSlug: string, formId: string) => {
+export const getForm = cache(async (workspaceSlug: string, formId: string) => {
   const workspace = await requireWorkspace(workspaceSlug);
   const [form] = await db
     .select()
@@ -100,7 +101,7 @@ export const getForm = async (workspaceSlug: string, formId: string) => {
     throw notFoundError("Form not found");
 
   return { ...form, draftSchema: formSchemaV1Schema.parse(form.draftSchema) };
-};
+});
 
 export const saveDraft = async (
   workspaceSlug: string,

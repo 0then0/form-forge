@@ -19,11 +19,16 @@ const isTheme = (value: string | null): value is Theme =>
   value === "system" || value === "light" || value === "dark";
 
 const storedTheme = (): Theme => {
+  if (document.documentElement.dataset.themeVolatile === "true") {
+    const value = document.documentElement.dataset.theme ?? null;
+    return isTheme(value) ? value : "system";
+  }
   try {
     const value = window.localStorage.getItem(THEME_STORAGE_KEY);
     return isTheme(value) ? value : "system";
   } catch {
-    return "system";
+    const value = document.documentElement.dataset.theme ?? null;
+    return isTheme(value) ? value : "system";
   }
 };
 
@@ -35,6 +40,15 @@ const applyTheme = (theme: Theme) => {
   document.documentElement.classList.toggle("dark", dark);
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.colorScheme = dark ? "dark" : "light";
+};
+
+const persistTheme = (theme: Theme) => {
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    delete document.documentElement.dataset.themeVolatile;
+  } catch {
+    document.documentElement.dataset.themeVolatile = "true";
+  }
 };
 
 const subscribeTheme = (onStoreChange: () => void) => {
@@ -61,13 +75,9 @@ export const ThemeToggle = ({ className }: { className?: string }) => {
   );
 
   const selectTheme = (nextTheme: Theme) => {
-    try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
-      applyTheme(nextTheme);
-      window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
-    } catch {
-      applyTheme(nextTheme);
-    }
+    persistTheme(nextTheme);
+    applyTheme(nextTheme);
+    window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
   };
 
   return (

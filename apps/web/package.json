@@ -6,7 +6,7 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
-    "lint": "eslint app src next.config.ts",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
@@ -15,7 +15,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@auth/drizzle-adapter": "1.4.2",
+    "@auth/drizzle-adapter": "1.11.3",
     "@form-forge/form-renderer": "workspace:*",
     "@form-forge/form-schema": "workspace:*",
     "@form-forge/ui": "workspace:*",

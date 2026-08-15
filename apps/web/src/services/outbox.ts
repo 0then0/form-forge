@@ -21,15 +21,24 @@ import {
 } from "@/lib/delivery-policy";
 import { deriveDeliveryStatus } from "@/lib/delivery-status";
 
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
+
 const eventForOutbox = (event: {
   aggregateId: string;
   id: string;
+  payload: Record<string, unknown>;
   type: string;
 }) => {
   switch (event.type) {
     case "submission.received":
       return submissionReceived.create(
-        { submissionId: event.aggregateId },
+        {
+          ...(isStringArray(event.payload.endpointIds)
+            ? { endpointIds: event.payload.endpointIds }
+            : {}),
+          submissionId: event.aggregateId,
+        },
         { id: event.id },
       );
     case "delivery.requested":
@@ -54,6 +63,7 @@ export const dispatchPendingOutbox = async (
     aggregateId: string;
     attempts: number;
     id: string;
+    payload: Record<string, unknown>;
     type: string;
   }>(sql`
     with candidates as (
@@ -73,6 +83,7 @@ export const dispatchPendingOutbox = async (
     where event.id = candidates.id
     returning event.id,
               event.aggregate_id as "aggregateId",
+              event.payload,
               event.type,
               event.attempts
   `);

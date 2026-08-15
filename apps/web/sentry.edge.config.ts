@@ -1,8 +1,10 @@
 import * as Sentry from "@sentry/nextjs";
 
+import { edgeEnv } from "@/env-edge";
+
 Sentry.init({
-  dsn: process.env.SENTRY_DSN || undefined,
-  enabled: Boolean(process.env.SENTRY_DSN),
+  dsn: edgeEnv.SENTRY_DSN,
+  enabled: Boolean(edgeEnv.SENTRY_DSN),
   sendDefaultPii: false,
   tracesSampleRate: 0.1,
 });

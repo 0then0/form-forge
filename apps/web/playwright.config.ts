@@ -11,27 +11,23 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: "html",
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
+    baseURL: "http://localhost:3000",
     screenshot: "only-on-failure",
     trace: "on-first-retry",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  ...(process.env.PLAYWRIGHT_BASE_URL
-    ? {}
-    : {
-        webServer: {
-          command: "pnpm dev",
-          ...(testDatabaseUrl
-            ? {
-                env: {
-                  DATABASE_URL: testDatabaseUrl,
-                  E2E_PIPELINE_TOKEN: e2ePipelineToken,
-                  TEST_DATABASE_URL: testDatabaseUrl,
-                },
-              }
-            : {}),
-          reuseExistingServer: false,
-          url: "http://localhost:3000",
-        },
-      }),
+  webServer: {
+    command: "pnpm dev",
+    ...(testDatabaseUrl
+      ? {
+          env: {
+            DATABASE_URL: testDatabaseUrl,
+            E2E_PIPELINE_TOKEN: e2ePipelineToken,
+            TEST_DATABASE_URL: testDatabaseUrl,
+          },
+        }
+      : {}),
+    reuseExistingServer: false,
+    url: "http://localhost:3000",
+  },
 });

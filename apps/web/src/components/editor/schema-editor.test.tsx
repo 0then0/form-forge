@@ -101,6 +101,7 @@ describe("SchemaEditor", () => {
     await user.click(screen.getByRole("button", { name: "Publish" }));
 
     await screen.findByText("Version 1 published");
+    expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
     expect(requestBody).toMatchObject({
       expectedRevision: revision,
       schema: {
@@ -110,6 +111,32 @@ describe("SchemaEditor", () => {
     });
     expect(draftSaveCount).toBe(0);
     await waitFor(() => expect(router.refresh).toHaveBeenCalledOnce());
+  });
+
+  it("does not offer publishing for an unchanged published schema", () => {
+    render(
+      <SchemaEditor
+        canEdit
+        formId="form-id"
+        initialDraftRevision={revision}
+        initialSchema={schema}
+        publicBaseUrl="http://localhost:3000"
+        publicSlug="contact"
+        published
+        versions={[
+          {
+            id: "version-id",
+            publishedAt: revision,
+            schema,
+            versionNumber: 1,
+          },
+        ]}
+        workspaceSlug="workspace"
+      />,
+      { wrapper },
+    );
+
+    expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
   });
 
   it("surfaces publish conflicts without saving the draft", async () => {

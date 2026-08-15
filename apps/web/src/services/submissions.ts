@@ -142,12 +142,13 @@ export const getSubmissionDetail = async (
     .limit(1);
   if (!submission) throw notFoundError("Submission not found");
 
-  const [events, deliveries] = await Promise.all([
+  const [eventRows, deliveryRows] = await Promise.all([
     db
       .select()
       .from(submissionEvents)
       .where(eq(submissionEvents.submissionId, submissionId))
-      .orderBy(desc(submissionEvents.createdAt)),
+      .orderBy(desc(submissionEvents.createdAt))
+      .limit(201),
     db
       .select({
         attemptCount: webhookDeliveries.attemptCount,
@@ -167,19 +168,36 @@ export const getSubmissionDetail = async (
         eq(webhookEndpoints.id, webhookDeliveries.endpointId),
       )
       .where(eq(webhookDeliveries.submissionId, submissionId))
-      .orderBy(desc(webhookDeliveries.createdAt)),
+      .orderBy(desc(webhookDeliveries.createdAt))
+      .limit(101),
   ]);
+  const eventsTruncated = eventRows.length > 200;
+  const deliveriesTruncated = deliveryRows.length > 100;
+  const events = eventsTruncated ? eventRows.slice(0, 200) : eventRows;
+  const deliveries = deliveriesTruncated
+    ? deliveryRows.slice(0, 100)
+    : deliveryRows;
 
   const deliveryIds = deliveries.map((delivery) => delivery.id);
-  const attempts = deliveryIds.length
+  const attemptRows = deliveryIds.length
     ? await db
         .select()
         .from(deliveryAttempts)
         .where(inArray(deliveryAttempts.deliveryId, deliveryIds))
         .orderBy(desc(deliveryAttempts.startedAt))
+        .limit(201)
     : [];
+  const attemptsTruncated = attemptRows.length > 200;
+  const attempts = attemptsTruncated ? attemptRows.slice(0, 200) : attemptRows;
 
-  return { attempts, deliveries, events, submission };
+  return {
+    attempts,
+    deliveries,
+    events,
+    historyTruncated:
+      attemptsTruncated || deliveriesTruncated || eventsTruncated,
+    submission,
+  };
 };
 
 const escapeCsv = (value: unknown): string => {
@@ -211,7 +229,15 @@ export const exportSubmissionsCsv = async (workspaceSlug: string) => {
     .innerJoin(formVersions, eq(formVersions.id, submissions.formVersionId))
     .where(eq(forms.workspaceId, workspace.id))
     .orderBy(desc(submissions.createdAt))
-    .limit(10_000);
+    .limit(10_001);
+
+  if (rows.length > 10_000) {
+    throw new AppError(
+      "VALIDATION_ERROR",
+      "This export exceeds 10,000 rows. Filter or archive data before exporting.",
+      422,
+    );
+  }
 
   const valueKeys = Array.from(
     new Set(rows.flatMap((row) => Object.keys(row.normalizedValues))),

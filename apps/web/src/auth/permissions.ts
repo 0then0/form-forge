@@ -1,6 +1,7 @@
 import "server-only";
 
 import { and, eq } from "drizzle-orm";
+import { cache } from "react";
 
 import { db } from "@/db/client";
 import { memberships, workspaces, type MembershipRole } from "@/db/schema";
@@ -13,10 +14,7 @@ const roleRank: Record<MembershipRole, number> = {
   owner: 3,
 };
 
-export const requireWorkspace = async (
-  workspaceSlug: string,
-  minimumRole: MembershipRole = "viewer",
-) => {
+const loadWorkspace = cache(async (workspaceSlug: string) => {
   const user = await requireUser();
   const [result] = await db
     .select({
@@ -37,8 +35,16 @@ export const requireWorkspace = async (
     .limit(1);
 
   if (!result) throw notFoundError("Workspace not found");
-  if (roleRank[result.role] < roleRank[minimumRole]) throw forbiddenError();
   return { ...result, user };
+});
+
+export const requireWorkspace = async (
+  workspaceSlug: string,
+  minimumRole: MembershipRole = "viewer",
+) => {
+  const result = await loadWorkspace(workspaceSlug);
+  if (roleRank[result.role] < roleRank[minimumRole]) throw forbiddenError();
+  return result;
 };
 
 export const canManageMembers = (role: MembershipRole) => role === "owner";

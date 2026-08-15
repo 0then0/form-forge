@@ -1,110 +1,58 @@
 "use client";
 
-import {
-  FIELD_TYPES,
-  formSchemaV1Schema,
-  type FieldType,
-  type FormField,
-  type FormSchemaV1,
-} from "@form-forge/form-schema";
-import {
-  Alert,
-  Button,
-  Card,
-  CardContent,
-  Input,
-  Label,
-  Select,
-  Textarea,
-} from "@form-forge/ui";
+import { formSchemaV1Schema, type FormSchemaV1 } from "@form-forge/form-schema";
+import { Alert, Card, CardContent } from "@form-forge/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  useFieldArray,
   useForm,
   useWatch,
   type FieldPath,
+  type UseFormReturn,
 } from "react-hook-form";
 
+import { ClientApiError, readApiData } from "@/lib/client-api";
 import { ArchiveFormButton } from "./archive-form-button";
 import { EditorHeader } from "./editor-header";
-import { FieldValidation } from "./field-validation";
+import { FieldsEditor } from "./fields-editor";
 import { FormSettings } from "./form-settings";
+import { PreviewErrorBoundary } from "./preview-error-boundary";
 import { SchemaPreview } from "./schema-preview";
 import { useUnsavedChangesWarning } from "./use-unsaved-changes-warning";
 import { VersionHistory } from "./version-history";
-import { VisibilityRules } from "./visibility-rules";
 
-type ApiEnvelope<T> = {
-  data?: T;
-  error?: { fieldErrors?: Record<string, string[]>; message: string };
+type Version = {
+  id: string;
+  publishedAt: string;
+  schema: FormSchemaV1;
+  versionNumber: number;
 };
 
-class ApiRequestError extends Error {
-  constructor(
-    message: string,
-    readonly fieldErrors?: Record<string, string[]>,
-  ) {
-    super(message);
-    this.name = "ApiRequestError";
-  }
-}
+type EditorStatus = {
+  changedSincePublish: boolean;
+  fieldCount: number;
+  valid: boolean;
+};
 
 const request = async <T,>(url: string, init: RequestInit): Promise<T> => {
   const response = await fetch(url, {
     ...init,
     headers: { "Content-Type": "application/json", ...init.headers },
   });
-  const body = (await response.json()) as ApiEnvelope<T>;
-  if (!response.ok || body.data === undefined) {
-    throw new ApiRequestError(
-      body.error?.message ?? "The request failed",
-      body.error?.fieldErrors,
-    );
-  }
-  return body.data;
+  return readApiData<T>(response, "The request failed");
 };
 
-const makeField = (type: FieldType, existing?: FormField): FormField => {
-  const base = {
-    id: existing?.id ?? crypto.randomUUID(),
-    key: existing?.key ?? `field_${crypto.randomUUID().slice(0, 6)}`,
-    label: existing?.label ?? "New field",
-    required: existing?.required ?? false,
-    width: existing?.width ?? ("full" as const),
-    ...(existing?.description === undefined
-      ? {}
-      : { description: existing.description }),
-    ...(existing?.visibility === undefined
-      ? {}
-      : { visibility: existing.visibility }),
-    ...(existing?.webhookKey === undefined
-      ? {}
-      : { webhookKey: existing.webhookKey }),
-  };
-
-  switch (type) {
-    case "select":
-      return {
-        ...base,
-        type,
-        options: [{ label: "Option 1", value: "option_1" }],
-      };
-    case "checkbox":
-      return { ...base, type };
-    case "date":
-      return { ...base, type };
-    case "number":
-      return { ...base, type, placeholder: "" };
-    case "email":
-      return { ...base, type, placeholder: "name@example.com" };
-    case "longText":
-    case "shortText":
-      return { ...base, type, placeholder: "" };
-  }
-};
+const summarizeSchema = (
+  schema: FormSchemaV1,
+  lastPublishedSchema?: FormSchemaV1,
+): EditorStatus => ({
+  changedSincePublish:
+    lastPublishedSchema === undefined ||
+    JSON.stringify(schema) !== JSON.stringify(lastPublishedSchema),
+  fieldCount: schema.fields.length,
+  valid: formSchemaV1Schema.safeParse(schema).success,
+});
 
 const path = (value: string) => value as FieldPath<FormSchemaV1>;
 
@@ -126,42 +74,48 @@ export const SchemaEditor = ({
   publicSlug: string;
   publicBaseUrl: string;
   published: boolean;
-  versions: Array<{
-    id: string;
-    publishedAt: string;
-    schema: FormSchemaV1;
-    versionNumber: number;
-  }>;
+  versions: Version[];
   workspaceSlug: string;
 }) => {
   const queryClient = useQueryClient();
   const router = useRouter();
   const [draftRevision, setDraftRevision] = useState(initialDraftRevision);
+  const lastPublishedSchema = useRef(versions[0]?.schema);
+  const [editorStatus, setEditorStatus] = useState(() =>
+    summarizeSchema(initialSchema, versions[0]?.schema),
+  );
   const [notice, setNotice] = useState<string>();
   const form = useForm<FormSchemaV1>({ defaultValues: initialSchema });
   const {
-    control,
     formState: { isDirty },
     handleSubmit,
     register,
     reset,
     setError,
   } = form;
-  const { append, fields, move, remove, update } = useFieldArray({
-    control,
-    name: "fields",
-    keyName: "editorKey",
-  });
-  const schema = useWatch({ control, compute: (value) => value });
-  const parsedSchema = useMemo(
-    () => formSchemaV1Schema.safeParse(schema),
-    [schema],
+
+  useEffect(
+    () =>
+      form.subscribe({
+        callback: ({ values }) => {
+          const next = summarizeSchema(values, lastPublishedSchema.current);
+          setEditorStatus((current) =>
+            current.changedSincePublish === next.changedSincePublish &&
+            current.fieldCount === next.fieldCount &&
+            current.valid === next.valid
+              ? current
+              : next,
+          );
+        },
+        formState: { values: true },
+      }),
+    [form],
   );
 
   useUnsavedChangesWarning(isDirty);
 
   const applyServerErrors = (error: Error) => {
-    if (!(error instanceof ApiRequestError) || !error.fieldErrors) return;
+    if (!(error instanceof ClientApiError) || !error.fieldErrors) return;
     for (const [fieldPath, messages] of Object.entries(error.fieldErrors)) {
       if (fieldPath === "_root" || fieldPath === "schema") continue;
       const editorPath = fieldPath.startsWith("schema.")
@@ -215,6 +169,8 @@ export const SchemaEditor = ({
       ),
     onSuccess: (version, publishedSchema) => {
       setDraftRevision(version.draftRevision);
+      lastPublishedSchema.current = publishedSchema;
+      setEditorStatus(summarizeSchema(form.getValues(), publishedSchema));
       const changedDuringPublish =
         JSON.stringify(form.getValues()) !== JSON.stringify(publishedSchema);
       reset(
@@ -244,28 +200,29 @@ export const SchemaEditor = ({
 
   return (
     <div>
-      <EditorHeader
+      <EditorHeaderWithTitle
         canPublish={
           canEdit &&
           !publishMutation.isPending &&
           !saveMutation.isPending &&
-          fields.length > 0 &&
-          parsedSchema.success
+          editorStatus.fieldCount > 0 &&
+          editorStatus.valid &&
+          editorStatus.changedSincePublish
         }
         canSave={
           canEdit &&
           !saveMutation.isPending &&
           !publishMutation.isPending &&
           isDirty &&
-          parsedSchema.success
+          editorStatus.valid
         }
         dirty={isDirty}
+        form={form}
         formId={formId}
         publicSlug={publicSlug}
         published={published}
         publishing={publishMutation.isPending}
         saving={saveMutation.isPending}
-        title={schema.title}
         workspaceSlug={workspaceSlug}
         onPublish={() => void publish()}
         onSave={() => void save()}
@@ -274,7 +231,7 @@ export const SchemaEditor = ({
       {mutationError ? (
         <Alert className="mb-5">
           {mutationError.message}
-          {mutationError instanceof ApiRequestError &&
+          {mutationError instanceof ClientApiError &&
           mutationError.fieldErrors ? (
             <ul className="mt-2 list-disc pl-5">
               {Object.entries(mutationError.fieldErrors).flatMap(
@@ -298,256 +255,120 @@ export const SchemaEditor = ({
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
         <div className="space-y-5">
           <FormSettings canEdit={canEdit} register={register} />
-
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="font-semibold">Fields</h2>
-              <p className="text-sm text-slate-600">
-                Order fields with explicit controls.
-              </p>
-            </div>
-            <Button
-              disabled={!canEdit}
-              size="sm"
-              variant="secondary"
-              onClick={() => append(makeField("shortText"))}
-            >
-              <Plus className="size-4" /> Add field
-            </Button>
-          </div>
-
-          {fields.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-600">
-              Add the first field to make this draft publishable.
-            </div>
-          ) : null}
-
-          {fields.map((field, index) => {
-            const current = schema.fields[index] ?? field;
-            const earlierFields = schema.fields.slice(0, index);
-            return (
-              <Card key={field.editorKey}>
-                <CardContent className="space-y-4">
-                  <div className="flex items-center gap-2">
-                    <span className="flex size-7 items-center justify-center rounded bg-slate-100 text-xs font-medium">
-                      {index + 1}
-                    </span>
-                    <div className="ml-auto flex gap-1">
-                      <Button
-                        aria-label="Move field up"
-                        disabled={!canEdit || index === 0}
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => move(index, index - 1)}
-                      >
-                        <ArrowUp className="size-4" />
-                      </Button>
-                      <Button
-                        aria-label="Move field down"
-                        disabled={!canEdit || index === fields.length - 1}
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => move(index, index + 1)}
-                      >
-                        <ArrowDown className="size-4" />
-                      </Button>
-                      <Button
-                        aria-label="Remove field"
-                        disabled={!canEdit}
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => remove(index)}
-                      >
-                        <Trash2 className="size-4 text-red-600" />
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label htmlFor={`field-${index}-type`}>Type</Label>
-                      <Select
-                        id={`field-${index}-type`}
-                        disabled={!canEdit}
-                        value={current.type}
-                        onChange={(event) =>
-                          update(
-                            index,
-                            makeField(event.target.value as FieldType, current),
-                          )
-                        }
-                      >
-                        {FIELD_TYPES.map((type) => (
-                          <option key={type} value={type}>
-                            {type}
-                          </option>
-                        ))}
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor={`field-${index}-label`}>Label</Label>
-                      <Input
-                        id={`field-${index}-label`}
-                        disabled={!canEdit}
-                        {...register(path(`fields.${index}.label`))}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor={`field-${index}-key`}>Key</Label>
-                      <Input
-                        id={`field-${index}-key`}
-                        disabled={!canEdit}
-                        {...register(path(`fields.${index}.key`))}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor={`field-${index}-webhook`}>
-                        Webhook key
-                      </Label>
-                      <Input
-                        id={`field-${index}-webhook`}
-                        disabled={!canEdit}
-                        placeholder={current.key}
-                        {...register(path(`fields.${index}.webhookKey`))}
-                      />
-                    </div>
-                    <div className="space-y-2 sm:col-span-2">
-                      <Label htmlFor={`field-${index}-description`}>
-                        Help text
-                      </Label>
-                      <Input
-                        id={`field-${index}-description`}
-                        disabled={!canEdit}
-                        {...register(path(`fields.${index}.description`))}
-                      />
-                    </div>
-                    {"placeholder" in current ? (
-                      <div className="space-y-2 sm:col-span-2">
-                        <Label htmlFor={`field-${index}-placeholder`}>
-                          Placeholder
-                        </Label>
-                        <Input
-                          id={`field-${index}-placeholder`}
-                          disabled={!canEdit}
-                          {...register(path(`fields.${index}.placeholder`))}
-                        />
-                      </div>
-                    ) : null}
-                    {current.type === "select" ? (
-                      <div className="space-y-2 sm:col-span-2">
-                        <Label htmlFor={`field-${index}-options`}>
-                          Options, one per line as label=value
-                        </Label>
-                        <Textarea
-                          id={`field-${index}-options`}
-                          disabled={!canEdit}
-                          value={current.options
-                            .map((option) => `${option.label}=${option.value}`)
-                            .join("\n")}
-                          onChange={(event) => {
-                            const options = event.target.value
-                              .split("\n")
-                              .filter(Boolean)
-                              .map((line) => {
-                                const [label = "", value = label] =
-                                  line.split("=");
-                                return {
-                                  label: label.trim(),
-                                  value: value.trim(),
-                                };
-                              });
-                            update(index, { ...current, options });
-                          }}
-                        />
-                      </div>
-                    ) : null}
-                    <div className="space-y-2">
-                      <Label htmlFor={`field-${index}-width`}>Width</Label>
-                      <Select
-                        id={`field-${index}-width`}
-                        disabled={!canEdit}
-                        {...register(path(`fields.${index}.width`))}
-                      >
-                        <option value="full">Full</option>
-                        <option value="half">Half</option>
-                      </Select>
-                    </div>
-                    <label className="flex items-center gap-2 self-end py-2 text-sm font-medium">
-                      <input
-                        type="checkbox"
-                        disabled={!canEdit}
-                        {...register(path(`fields.${index}.required`))}
-                      />
-                      Required
-                    </label>
-                    <FieldValidation
-                      canEdit={canEdit}
-                      field={current}
-                      index={index}
-                      update={(nextField) => update(index, nextField)}
-                    />
-                  </div>
-
-                  <VisibilityRules
-                    canEdit={canEdit}
-                    field={current}
-                    sourceFields={earlierFields}
-                    update={(nextField) => update(index, nextField)}
-                  />
-                </CardContent>
-              </Card>
-            );
-          })}
+          <FieldsEditor canEdit={canEdit} form={form} />
         </div>
 
-        <aside className="xl:sticky xl:top-6 xl:self-start">
-          <div className="space-y-5">
-            <SchemaPreview result={parsedSchema} />
-            {published ? (
-              <Card>
-                <div className="border-b border-slate-100 px-5 py-4">
-                  <h2 className="font-semibold">Embed</h2>
-                  <p className="mt-1 text-sm text-slate-600">
-                    Stable iframe using the hosted form.
-                  </p>
-                </div>
-                <CardContent>
-                  <code className="block overflow-x-auto rounded-lg bg-slate-950 p-3 text-xs break-all whitespace-pre-wrap text-slate-100">
-                    {`<iframe src="${publicBaseUrl}/f/${publicSlug}?embed=1" title="${schema.title}" loading="lazy" width="100%" height="640"></iframe>`}
-                  </code>
-                </CardContent>
-              </Card>
-            ) : null}
-            <VersionHistory
-              canEdit={canEdit}
-              currentSchema={schema}
-              draftRevision={draftRevision}
-              formId={formId}
-              versions={versions}
-              workspaceSlug={workspaceSlug}
-              onRestore={(restoredSchema, versionNumber, restoredRevision) => {
-                setDraftRevision(restoredRevision);
-                reset(restoredSchema);
-                setNotice(`Version ${versionNumber} restored as draft`);
-                router.refresh();
-              }}
-            />
-            <Card>
-              <CardContent>
-                <h2 className="font-semibold">Danger zone</h2>
-                <p className="mt-1 mb-4 text-sm text-slate-600">
-                  Archiving disables the hosted form without deleting
-                  submissions or versions.
-                </p>
-                <ArchiveFormButton
-                  disabled={!canEdit}
-                  formId={formId}
-                  workspaceSlug={workspaceSlug}
-                />
-              </CardContent>
-            </Card>
-          </div>
-        </aside>
+        <EditorSidebar
+          canEdit={canEdit}
+          draftRevision={draftRevision}
+          form={form}
+          formId={formId}
+          publicBaseUrl={publicBaseUrl}
+          publicSlug={publicSlug}
+          published={published}
+          versions={versions}
+          workspaceSlug={workspaceSlug}
+          onRestore={(restoredSchema, versionNumber, restoredRevision) => {
+            setDraftRevision(restoredRevision);
+            reset(restoredSchema);
+            setNotice(`Version ${versionNumber} restored as draft`);
+            router.refresh();
+          }}
+        />
       </div>
     </div>
+  );
+};
+
+const EditorHeaderWithTitle = ({
+  form,
+  ...props
+}: Omit<Parameters<typeof EditorHeader>[0], "title"> & {
+  form: UseFormReturn<FormSchemaV1>;
+}) => {
+  const title = useWatch({ control: form.control, name: "title" });
+  return <EditorHeader {...props} title={title} />;
+};
+
+const EditorSidebar = ({
+  canEdit,
+  draftRevision,
+  form,
+  formId,
+  onRestore,
+  publicBaseUrl,
+  publicSlug,
+  published,
+  versions,
+  workspaceSlug,
+}: {
+  canEdit: boolean;
+  draftRevision: string;
+  form: UseFormReturn<FormSchemaV1>;
+  formId: string;
+  onRestore: (
+    schema: FormSchemaV1,
+    versionNumber: number,
+    draftRevision: string,
+  ) => void;
+  publicBaseUrl: string;
+  publicSlug: string;
+  published: boolean;
+  versions: Version[];
+  workspaceSlug: string;
+}) => {
+  const schema = useWatch({
+    control: form.control,
+    compute: (value) => value,
+  });
+  const parsedSchema = formSchemaV1Schema.safeParse(schema);
+  const serializedSchema = JSON.stringify(schema);
+
+  return (
+    <aside className="xl:sticky xl:top-6 xl:self-start">
+      <div className="space-y-5">
+        <PreviewErrorBoundary resetKey={serializedSchema}>
+          <SchemaPreview result={parsedSchema} />
+        </PreviewErrorBoundary>
+        {published ? (
+          <Card>
+            <div className="border-b border-slate-100 px-5 py-4">
+              <h2 className="font-semibold">Embed</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Stable iframe using the hosted form.
+              </p>
+            </div>
+            <CardContent>
+              <code className="block overflow-x-auto rounded-lg bg-slate-950 p-3 text-xs break-all whitespace-pre-wrap text-slate-100">
+                {`<iframe src="${publicBaseUrl}/f/${publicSlug}?embed=1" title="${schema.title}" loading="lazy" width="100%" height="640"></iframe>`}
+              </code>
+            </CardContent>
+          </Card>
+        ) : null}
+        <VersionHistory
+          canEdit={canEdit}
+          currentSchema={schema}
+          draftRevision={draftRevision}
+          formId={formId}
+          versions={versions}
+          workspaceSlug={workspaceSlug}
+          onRestore={onRestore}
+        />
+        <Card>
+          <CardContent>
+            <h2 className="font-semibold">Danger zone</h2>
+            <p className="mt-1 mb-4 text-sm text-slate-600">
+              Archiving disables the hosted form without deleting submissions or
+              versions.
+            </p>
+            <ArchiveFormButton
+              disabled={!canEdit}
+              formId={formId}
+              workspaceSlug={workspaceSlug}
+            />
+          </CardContent>
+        </Card>
+      </div>
+    </aside>
   );
 };

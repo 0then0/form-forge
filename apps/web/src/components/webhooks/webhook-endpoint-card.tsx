@@ -12,6 +12,8 @@ import {
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { readApiData } from "@/lib/client-api";
+
 type Endpoint = { enabled: boolean; id: string; name: string; url: string };
 
 export const WebhookEndpointCard = ({
@@ -41,14 +43,11 @@ export const WebhookEndpointCard = ({
         ...init,
         headers: { "Content-Type": "application/json", ...init.headers },
       });
-      const body = (await response.json()) as {
-        data?: { secret?: string };
-        error?: { message: string };
-      };
-      if (!response.ok || !body.data) {
-        throw new Error(body.error?.message ?? "Webhook update failed");
-      }
-      if (body.data.secret) setSecret(body.data.secret);
+      const updated = await readApiData<{ secret?: string }>(
+        response,
+        "Webhook update failed",
+      );
+      if (updated.secret) setSecret(updated.secret);
       router.refresh();
     } catch (caught) {
       setError(

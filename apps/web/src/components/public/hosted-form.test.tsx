@@ -66,4 +66,31 @@ describe("HostedForm", () => {
       "visitorId",
     );
   });
+
+  it("shows a stable message for a non-JSON gateway error", async () => {
+    vi.stubGlobal("matchMedia", () => ({
+      addEventListener: vi.fn(),
+      matches: false,
+      removeEventListener: vi.fn(),
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response("<html>Bad gateway</html>", { status: 502 }),
+        ),
+    );
+    const user = userEvent.setup();
+    render(
+      <HostedForm schema={schema} slug="contact" versionId="version-id" />,
+    );
+
+    await user.type(screen.getByLabelText("Name *"), "Ada");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+
+    expect(
+      await screen.findByText("Your response could not be submitted"),
+    ).toBeVisible();
+  });
 });

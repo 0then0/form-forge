@@ -34,8 +34,9 @@ export const postWebhook = async (
   rawUrl: string,
   body: string,
   headers: Record<string, string>,
+  timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<WebhookResponse> => {
-  const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const signal = AbortSignal.timeout(timeoutMs);
   const target = await withAbortSignal(resolveWebhookTarget(rawUrl), signal);
   const url = new URL(target.url);
 

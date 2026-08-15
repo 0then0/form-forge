@@ -127,4 +127,52 @@ describe("FormRenderer", () => {
 
     expect(onSubmit).toHaveBeenCalledWith({});
   });
+
+  it("unregisters a field after it becomes hidden", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <FormRenderer
+        schema={{
+          ...schema,
+          fields: [
+            {
+              id: "22222222-2222-4222-8222-222222222222",
+              key: "kind",
+              label: "Kind",
+              options: [
+                { label: "Business", value: "business" },
+                { label: "Personal", value: "personal" },
+              ],
+              required: true,
+              type: "select",
+              width: "full",
+            },
+            {
+              id: "33333333-3333-4333-8333-333333333333",
+              key: "company",
+              label: "Company",
+              required: false,
+              type: "shortText",
+              visibility: {
+                fieldKey: "kind",
+                operator: "equals",
+                value: "business",
+              },
+              width: "full",
+            },
+          ],
+        }}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText("Kind *"), "business");
+    await user.type(screen.getByLabelText("Company"), "Form Forge");
+    await user.selectOptions(screen.getByLabelText("Kind *"), "personal");
+    expect(screen.queryByLabelText("Company")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(onSubmit).toHaveBeenCalledWith({ kind: "personal" });
+  });
 });

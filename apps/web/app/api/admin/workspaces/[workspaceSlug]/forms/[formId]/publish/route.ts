@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { apiError, parseJsonBody } from "@/lib/api";
+import { apiError, MAX_FORM_SCHEMA_BODY_BYTES, parseJsonBody } from "@/lib/api";
 import { publishForm } from "@/services/forms";
 
 type Context = {
@@ -13,7 +13,7 @@ export const POST = async (request: Request, context: Context) => {
     const version = await publishForm(
       workspaceSlug,
       formId,
-      await parseJsonBody(request),
+      await parseJsonBody(request, MAX_FORM_SCHEMA_BODY_BYTES),
     );
     return NextResponse.json({ data: version }, { status: 201 });
   } catch (error) {
