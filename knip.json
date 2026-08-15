@@ -1,0 +1,18 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    "apps/web": {
+      "drizzle": false,
+      "entry": [
+        "app/**/*.{ts,tsx}",
+        "drizzle.config.ts",
+        "src/inngest/functions.ts"
+      ],
+      "ignoreDependencies": ["@testing-library/user-event", "msw"],
+      "project": ["**/*.{ts,tsx,css}"]
+    },
+    "packages/*": {
+      "project": ["src/**/*.{ts,tsx}"]
+    }
+  }
+}

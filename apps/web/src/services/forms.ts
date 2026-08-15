@@ -1,0 +1,237 @@
+import "server-only";
+
+import {
+  defaultFormSchema,
+  formSchemaV1Schema,
+  type FormSchemaV1,
+} from "@form-forge/form-schema";
+import { and, desc, eq, max, ne } from "drizzle-orm";
+import { createHash } from "node:crypto";
+
+import { requireWorkspace } from "@/auth/permissions";
+import { db } from "@/db/client";
+import { auditLogs, forms, formVersions } from "@/db/schema";
+import { AppError, notFoundError } from "@/lib/errors";
+import { slugify } from "@/lib/slug";
+
+const hashSchema = (schema: FormSchemaV1): string =>
+  createHash("sha256").update(JSON.stringify(schema)).digest("hex");
+
+const uniqueFormSlug = (name: string) =>
+  `${slugify(name)}-${crypto.randomUUID().slice(0, 8)}`;
+
+export const listActiveForms = async (workspaceSlug: string) => {
+  const workspace = await requireWorkspace(workspaceSlug);
+  const rows = await db
+    .select({
+      id: forms.id,
+      name: forms.name,
+      slug: forms.slug,
+      status: forms.status,
+      publishedVersionId: forms.publishedVersionId,
+      updatedAt: forms.updatedAt,
+    })
+    .from(forms)
+    .where(
+      and(eq(forms.workspaceId, workspace.id), ne(forms.status, "archived")),
+    )
+    .orderBy(desc(forms.updatedAt));
+  return rows;
+};
+
+export const createForm = async (workspaceSlug: string, name: string) => {
+  const workspace = await requireWorkspace(workspaceSlug, "editor");
+  const schema = { ...defaultFormSchema(), title: name };
+
+  return db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(forms)
+      .values({
+        createdBy: workspace.user.id,
+        draftSchema: schema,
+        name,
+        slug: uniqueFormSlug(name),
+        workspaceId: workspace.id,
+      })
+      .returning();
+    if (!created) throw new Error("Form creation did not return a row");
+
+    await tx.insert(auditLogs).values({
+      action: "form.created",
+      actorId: workspace.user.id,
+      metadata: { name: created.name },
+      resourceId: created.id,
+      resourceType: "form",
+      workspaceId: workspace.id,
+    });
+    return created;
+  });
+};
+
+export const getForm = async (workspaceSlug: string, formId: string) => {
+  const workspace = await requireWorkspace(workspaceSlug);
+  const [form] = await db
+    .select()
+    .from(forms)
+    .where(and(eq(forms.id, formId), eq(forms.workspaceId, workspace.id)))
+    .limit(1);
+  if (!form || form.status === "archived")
+    throw notFoundError("Form not found");
+
+  return { ...form, draftSchema: formSchemaV1Schema.parse(form.draftSchema) };
+};
+
+export const saveDraft = async (
+  workspaceSlug: string,
+  formId: string,
+  input: unknown,
+) => {
+  const workspace = await requireWorkspace(workspaceSlug, "editor");
+  const schema = formSchemaV1Schema.parse(input);
+
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ id: forms.id, status: forms.status })
+      .from(forms)
+      .where(and(eq(forms.id, formId), eq(forms.workspaceId, workspace.id)))
+      .limit(1);
+    if (!existing || existing.status === "archived") {
+      throw notFoundError("Form not found");
+    }
+
+    const [updated] = await tx
+      .update(forms)
+      .set({ draftSchema: schema, name: schema.title, updatedAt: new Date() })
+      .where(eq(forms.id, formId))
+      .returning();
+    if (!updated) throw new Error("Draft update did not return a row");
+
+    await tx.insert(auditLogs).values({
+      action: "form.draft_saved",
+      actorId: workspace.user.id,
+      metadata: { fieldCount: schema.fields.length },
+      resourceId: formId,
+      resourceType: "form",
+      workspaceId: workspace.id,
+    });
+    return updated;
+  });
+};
+
+export const publishForm = async (workspaceSlug: string, formId: string) => {
+  const workspace = await requireWorkspace(workspaceSlug, "editor");
+
+  return db.transaction(async (tx) => {
+    const [form] = await tx
+      .select()
+      .from(forms)
+      .where(and(eq(forms.id, formId), eq(forms.workspaceId, workspace.id)))
+      .limit(1)
+      .for("update");
+    if (!form || form.status === "archived")
+      throw notFoundError("Form not found");
+
+    const schema = formSchemaV1Schema.parse(form.draftSchema);
+    if (schema.fields.length === 0) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Add at least one field before publishing",
+        422,
+      );
+    }
+    const schemaHash = hashSchema(schema);
+    const [currentVersion] = form.publishedVersionId
+      ? await tx
+          .select({ schemaHash: formVersions.schemaHash })
+          .from(formVersions)
+          .where(eq(formVersions.id, form.publishedVersionId))
+          .limit(1)
+      : [];
+    if (currentVersion?.schemaHash === schemaHash) {
+      throw new AppError(
+        "CONFLICT",
+        "This draft is identical to a published version",
+        409,
+      );
+    }
+
+    const [latest] = await tx
+      .select({ value: max(formVersions.versionNumber) })
+      .from(formVersions)
+      .where(eq(formVersions.formId, formId));
+    const versionNumber = (latest?.value ?? 0) + 1;
+
+    const [version] = await tx
+      .insert(formVersions)
+      .values({
+        formId,
+        publishedBy: workspace.user.id,
+        schema,
+        schemaHash,
+        versionNumber,
+      })
+      .returning();
+    if (!version) throw new Error("Version creation did not return a row");
+
+    await tx
+      .update(forms)
+      .set({
+        publishedVersionId: version.id,
+        status: "published",
+        updatedAt: new Date(),
+      })
+      .where(eq(forms.id, formId));
+
+    await tx.insert(auditLogs).values({
+      action: "form.published",
+      actorId: workspace.user.id,
+      metadata: { schemaHash, versionNumber },
+      resourceId: formId,
+      resourceType: "form",
+      workspaceId: workspace.id,
+    });
+    return version;
+  });
+};
+
+export const listFormVersions = async (
+  workspaceSlug: string,
+  formId: string,
+) => {
+  await getForm(workspaceSlug, formId);
+  return db
+    .select({
+      id: formVersions.id,
+      publishedAt: formVersions.publishedAt,
+      schemaHash: formVersions.schemaHash,
+      versionNumber: formVersions.versionNumber,
+    })
+    .from(formVersions)
+    .where(eq(formVersions.formId, formId))
+    .orderBy(desc(formVersions.versionNumber));
+};
+
+export const archiveForm = async (workspaceSlug: string, formId: string) => {
+  const workspace = await requireWorkspace(workspaceSlug, "editor");
+  return db.transaction(async (tx) => {
+    const [archived] = await tx
+      .update(forms)
+      .set({
+        archivedAt: new Date(),
+        status: "archived",
+        updatedAt: new Date(),
+      })
+      .where(and(eq(forms.id, formId), eq(forms.workspaceId, workspace.id)))
+      .returning({ id: forms.id });
+    if (!archived) throw notFoundError("Form not found");
+    await tx.insert(auditLogs).values({
+      action: "form.archived",
+      actorId: workspace.user.id,
+      metadata: {},
+      resourceId: formId,
+      resourceType: "form",
+      workspaceId: workspace.id,
+    });
+    return archived;
+  });
+};
