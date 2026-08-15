@@ -3,13 +3,15 @@ import { redirect } from "next/navigation";
 
 import { getSession } from "@/auth/session";
 import { SignInButton } from "@/components/sign-in-button";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 export default async function LoginPage() {
   const session = await getSession();
   if (session) redirect("/app");
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-6 py-12">
+    <main className="relative flex min-h-screen items-center justify-center px-6 py-12">
+      <ThemeToggle className="absolute top-4 right-4 sm:top-6 sm:right-6" />
       <Card className="w-full max-w-sm">
         <CardHeader>
           <p className="text-sm font-medium text-blue-700">Form Forge</p>

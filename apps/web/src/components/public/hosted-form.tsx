@@ -11,6 +11,7 @@ import { CheckCircle2 } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { webRendererComponents } from "@/components/renderer-adapter";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const utmKeys = [
   "utm_source",
@@ -108,6 +109,7 @@ export const HostedForm = ({
   if (compact) return <div className="bg-white p-5">{content}</div>;
   return (
     <main className="mx-auto flex min-h-screen max-w-2xl items-center px-4 py-12 sm:px-6">
+      <ThemeToggle className="fixed top-4 right-4 sm:top-6 sm:right-6" />
       <div className="w-full">
         <Card>
           <CardContent className="p-6 sm:p-8">{content}</CardContent>

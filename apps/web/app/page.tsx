@@ -2,6 +2,8 @@ import { Button } from "@form-forge/ui";
 import { ArrowRight, Braces, RefreshCcw, Webhook } from "lucide-react";
 import Link from "next/link";
 
+import { ThemeToggle } from "@/components/theme-toggle";
+
 const features = [
   {
     icon: Braces,
@@ -28,9 +30,12 @@ export default function MarketingPage() {
         <Link href="/" className="font-semibold tracking-tight text-slate-950">
           Form Forge
         </Link>
-        <Button asChild variant="secondary" size="sm">
-          <Link href="/login">Sign in</Link>
-        </Button>
+        <div className="flex items-center gap-3">
+          <ThemeToggle />
+          <Button asChild variant="secondary" size="sm">
+            <Link href="/login">Sign in</Link>
+          </Button>
+        </div>
       </nav>
       <section className="mx-auto max-w-4xl px-6 py-24 text-center">
         <p className="text-sm font-medium text-blue-700">

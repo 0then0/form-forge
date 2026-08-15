@@ -1,22 +1,26 @@
 @import "tailwindcss";
 @source "../../../packages/ui/src";
 @source "../../../packages/form-renderer/src";
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
+  --app-background: #f8fafc;
+  --app-foreground: #0f172a;
   color-scheme: light;
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  background: #f8fafc;
-  color: #0f172a;
+  background: var(--app-background);
+  color: var(--app-foreground);
 }
 
 * {
-  border-color: #e2e8f0;
+  border-color: var(--color-slate-200);
 }
 
 body {
   min-height: 100vh;
   margin: 0;
-  background: #f8fafc;
+  background: var(--app-background);
+  color: var(--app-foreground);
 }
 
 button,
@@ -24,4 +28,77 @@ input,
 textarea,
 select {
   font: inherit;
+}
+
+:root.dark {
+  --app-background: #020617;
+  --app-foreground: #f8fafc;
+  color-scheme: dark;
+  background: var(--app-background);
+  color: var(--app-foreground);
+}
+
+:root.dark .bg-white {
+  background-color: #0f172a;
+}
+
+:root.dark .bg-slate-50,
+:root.dark .hover\:bg-slate-50:hover {
+  background-color: #020617;
+}
+
+:root.dark .bg-slate-100,
+:root.dark .hover\:bg-slate-100:hover,
+:root.dark .disabled\:bg-slate-100:disabled {
+  background-color: #1e293b;
+}
+
+:root.dark .bg-slate-200 {
+  background-color: #334155;
+}
+
+:root.dark .text-slate-950,
+:root.dark .hover\:text-slate-950:hover {
+  color: #f8fafc;
+}
+
+:root.dark .text-slate-900 {
+  color: #f1f5f9;
+}
+
+:root.dark .text-slate-700 {
+  color: #cbd5e1;
+}
+
+:root.dark .text-slate-600 {
+  color: #94a3b8;
+}
+
+:root.dark .text-slate-500 {
+  color: #94a3b8;
+}
+
+:root.dark .border-slate-100 {
+  border-color: #1e293b;
+}
+
+:root.dark .border-slate-200 {
+  border-color: #334155;
+}
+
+:root.dark .border-slate-300 {
+  border-color: #475569;
+}
+
+:root.dark .text-blue-700 {
+  color: #60a5fa;
+}
+
+:root.dark .text-red-600,
+:root.dark .text-red-700 {
+  color: #fca5a5;
+}
+
+:root.dark .text-emerald-600 {
+  color: #6ee7b7;
 }

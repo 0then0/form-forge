@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 
 import { requireWorkspace } from "@/auth/permissions";
 import { SignOutButton } from "@/components/sign-out-button";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import { listUserWorkspaces } from "@/services/workspaces";
 
@@ -30,16 +31,20 @@ export default async function WorkspaceLayout({
     <div className="min-h-screen bg-slate-50">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex h-16 max-w-screen-2xl items-center gap-4 px-4 sm:px-6">
-          <Link href={`/app/${workspaceSlug}/forms`} className="font-semibold">
+          <Link
+            href={`/app/${workspaceSlug}/forms`}
+            className="hidden font-semibold sm:block"
+          >
             Form Forge
           </Link>
-          <div className="h-5 w-px bg-slate-200" />
+          <div className="hidden h-5 w-px bg-slate-200 sm:block" />
           <WorkspaceSwitcher
             currentSlug={workspaceSlug}
             workspaces={workspaces}
           />
           <Badge className="hidden sm:inline-flex">{workspace.role}</Badge>
           <div className="ml-auto flex items-center gap-3">
+            <ThemeToggle />
             <span className="hidden max-w-52 truncate text-sm text-slate-600 sm:block">
               {workspace.user.email}
             </span>

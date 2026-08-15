@@ -6,10 +6,11 @@ type BadgeTone = "neutral" | "success" | "warning" | "danger" | "info";
 
 const badgeTones: Record<BadgeTone, string> = {
   neutral: "bg-slate-100 text-slate-700",
-  success: "bg-emerald-100 text-emerald-800",
-  warning: "bg-amber-100 text-amber-800",
-  danger: "bg-red-100 text-red-800",
-  info: "bg-blue-100 text-blue-800",
+  success:
+    "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+  warning: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+  danger: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300",
+  info: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300",
 };
 
 export const Badge = ({
@@ -38,9 +39,12 @@ export const Alert = ({
     role={tone === "danger" ? "alert" : "status"}
     className={cn(
       "rounded-lg border px-4 py-3 text-sm",
-      tone === "danger" && "border-red-200 bg-red-50 text-red-900",
-      tone === "info" && "border-blue-200 bg-blue-50 text-blue-900",
-      tone === "success" && "border-emerald-200 bg-emerald-50 text-emerald-900",
+      tone === "danger" &&
+        "border-red-200 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-200",
+      tone === "info" &&
+        "border-blue-200 bg-blue-50 text-blue-900 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200",
+      tone === "success" &&
+        "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200",
       className,
     )}
     {...props}
