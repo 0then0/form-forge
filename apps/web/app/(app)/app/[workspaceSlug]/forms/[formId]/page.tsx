@@ -26,6 +26,7 @@ export default async function FormEditorPage({
       versions={versions.map((version) => ({
         id: version.id,
         publishedAt: version.publishedAt.toISOString(),
+        schema: version.schema,
         versionNumber: version.versionNumber,
       }))}
       workspaceSlug={workspaceSlug}

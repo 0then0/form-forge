@@ -181,12 +181,15 @@ export const getSubmissionDetail = async (
 };
 
 const escapeCsv = (value: unknown): string => {
-  const serialized =
+  let serialized =
     value === null || value === undefined
       ? ""
       : typeof value === "object"
         ? JSON.stringify(value)
         : String(value);
+  if (/^[\t\r]/.test(serialized) || /^\s*[=+\-@]/.test(serialized)) {
+    serialized = `'${serialized}`;
+  }
   return `"${serialized.replaceAll('"', '""')}"`;
 };
 

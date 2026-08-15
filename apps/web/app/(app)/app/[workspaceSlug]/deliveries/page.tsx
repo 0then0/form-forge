@@ -1,8 +1,11 @@
-import { Badge, EmptyState } from "@form-forge/ui";
+import { Badge, Button, EmptyState, Select } from "@form-forge/ui";
+import Link from "next/link";
+import { z } from "zod";
 
 import { canEdit, requireWorkspace } from "@/auth/permissions";
 import { RetryButton } from "@/components/deliveries/retry-button";
 import { listWorkspaceDeliveries } from "@/services/deliveries";
+import { listActiveForms } from "@/services/forms";
 
 const statusTone = {
   failed: "danger",
@@ -13,14 +16,39 @@ const statusTone = {
 
 export default async function DeliveriesPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ workspaceSlug: string }>;
+  searchParams: Promise<{
+    cursor?: string;
+    formId?: string;
+    status?: string;
+  }>;
 }) {
   const { workspaceSlug } = await params;
-  const [workspace, deliveries] = await Promise.all([
+  const query = await searchParams;
+  const status = ["pending", "processing", "succeeded", "failed"].includes(
+    query.status ?? "",
+  )
+    ? (query.status as "pending" | "processing" | "succeeded" | "failed")
+    : undefined;
+  const formId = z.uuid().safeParse(query.formId).data;
+  const [workspace, deliveryPage, activeForms] = await Promise.all([
     requireWorkspace(workspaceSlug),
-    listWorkspaceDeliveries(workspaceSlug),
+    listWorkspaceDeliveries({
+      workspaceSlug,
+      ...(query.cursor ? { cursor: query.cursor } : {}),
+      ...(formId ? { formId } : {}),
+      ...(status ? { status } : {}),
+    }),
+    listActiveForms(workspaceSlug),
   ]);
+  const deliveries = deliveryPage.data;
+  const nextParams = new URLSearchParams();
+  if (status) nextParams.set("status", status);
+  if (formId) nextParams.set("formId", formId);
+  if (deliveryPage.nextCursor)
+    nextParams.set("cursor", deliveryPage.nextCursor);
 
   return (
     <div>
@@ -30,6 +58,32 @@ export default async function DeliveriesPage({
           Inspect current webhook state and recover terminal failures.
         </p>
       </div>
+      <form className="mb-4 flex flex-wrap items-end gap-3">
+        <label className="space-y-1 text-sm font-medium">
+          <span className="block">Status</span>
+          <Select name="status" defaultValue={status ?? ""}>
+            <option value="">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="processing">Processing</option>
+            <option value="succeeded">Succeeded</option>
+            <option value="failed">Failed</option>
+          </Select>
+        </label>
+        <label className="space-y-1 text-sm font-medium">
+          <span className="block">Form</span>
+          <Select name="formId" defaultValue={formId ?? ""}>
+            <option value="">All forms</option>
+            {activeForms.map((form) => (
+              <option key={form.id} value={form.id}>
+                {form.name}
+              </option>
+            ))}
+          </Select>
+        </label>
+        <Button type="submit" variant="secondary">
+          Apply filters
+        </Button>
+      </form>
       {deliveries.length === 0 ? (
         <EmptyState
           title="No webhook deliveries"
@@ -79,6 +133,13 @@ export default async function DeliveriesPage({
           </table>
         </div>
       )}
+      {deliveryPage.nextCursor ? (
+        <div className="mt-4 text-center">
+          <Button asChild variant="secondary">
+            <Link href={`?${nextParams.toString()}`}>Next page</Link>
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

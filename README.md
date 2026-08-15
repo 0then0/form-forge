@@ -142,6 +142,47 @@ E2E_PUBLISHED_FORM_SLUG=<form-slug> pnpm test:e2e
 
 Playwright starts the web application automatically unless `PLAYWRIGHT_BASE_URL` points to an already running instance. PostgreSQL, migrations, and the application env file must still be configured.
 
+The full delivery recovery scenario also requires an authenticated owner or
+editor session, a workspace, the running Inngest Dev Server, and two public
+HTTPS test receivers. The first receiver must return a non-2xx response and the
+second must return a 2xx response. Save an authenticated browser state after
+signing in, then run:
+
+```sh
+pnpm --filter @form-forge/web exec playwright codegen \
+  --save-storage=/tmp/form-forge-auth.json http://localhost:3000
+
+PLAYWRIGHT_BASE_URL=http://localhost:3000 \
+PLAYWRIGHT_STORAGE_STATE=/tmp/form-forge-auth.json \
+E2E_WORKSPACE_SLUG=<workspace-slug> \
+E2E_FAILURE_WEBHOOK_URL=<public-https-url-returning-non-2xx> \
+E2E_SUCCESS_WEBHOOK_URL=<public-https-url-returning-2xx> \
+pnpm test:e2e -- delivery-flow.spec.ts
+```
+
+Use a disposable local database for this scenario. The test archives the form
+it creates, but deliberately exercises the real database, Auth.js session,
+public/admin HTTP routes, hosted UI, outbox, Inngest functions, pinned webhook
+transport, delivery dashboard, and manual retry UI.
+
+### PostgreSQL integration tests
+
+The delivery and submission integration suite is skipped unless it receives a
+dedicated disposable database. Never point this variable at the development or
+production database because the suite drops and recreates its `public` schema:
+
+```sh
+createdb form_forge_test
+export TEST_DATABASE_URL='postgresql://postgres:postgres@localhost:5432/form_forge_test'
+pnpm --filter @form-forge/web exec vitest run \
+  src/integration/pipeline.integration.test.ts
+```
+
+The suite applies all Drizzle migrations before testing idempotency,
+submission/outbox atomicity, RBAC, concurrent publication and owner changes,
+outbox claims, expired delivery leases, webhook failures, signatures, automatic
+and manual retries, version restore, endpoint lifecycle, and CSV export safety.
+
 ## Public contracts
 
 - `GET /api/forms/:slug` returns the current published schema and version identity.

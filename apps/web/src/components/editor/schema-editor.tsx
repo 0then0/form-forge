@@ -1,17 +1,14 @@
 "use client";
 
-import { FormRenderer } from "@form-forge/form-renderer";
 import {
   FIELD_TYPES,
   formSchemaV1Schema,
   type FieldType,
   type FormField,
   type FormSchemaV1,
-  type VisibilityOperator,
 } from "@form-forge/form-schema";
 import {
   Alert,
-  Badge,
   Button,
   Card,
   CardContent,
@@ -21,19 +18,9 @@ import {
   Textarea,
 } from "@form-forge/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  ArrowDown,
-  ArrowUp,
-  Eye,
-  Plus,
-  Save,
-  Send,
-  Trash2,
-  Webhook,
-} from "lucide-react";
-import Link from "next/link";
+import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   useFieldArray,
   useForm,
@@ -41,10 +28,29 @@ import {
   type FieldPath,
 } from "react-hook-form";
 
-import { webRendererComponents } from "@/components/renderer-adapter";
 import { ArchiveFormButton } from "./archive-form-button";
+import { EditorHeader } from "./editor-header";
+import { FieldValidation } from "./field-validation";
+import { FormSettings } from "./form-settings";
+import { SchemaPreview } from "./schema-preview";
+import { useUnsavedChangesWarning } from "./use-unsaved-changes-warning";
+import { VersionHistory } from "./version-history";
+import { VisibilityRules } from "./visibility-rules";
 
-type ApiEnvelope<T> = { data?: T; error?: { message: string } };
+type ApiEnvelope<T> = {
+  data?: T;
+  error?: { fieldErrors?: Record<string, string[]>; message: string };
+};
+
+class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly fieldErrors?: Record<string, string[]>,
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
 
 const request = async <T,>(url: string, init: RequestInit): Promise<T> => {
   const response = await fetch(url, {
@@ -53,7 +59,10 @@ const request = async <T,>(url: string, init: RequestInit): Promise<T> => {
   });
   const body = (await response.json()) as ApiEnvelope<T>;
   if (!response.ok || body.data === undefined) {
-    throw new Error(body.error?.message ?? "The request failed");
+    throw new ApiRequestError(
+      body.error?.message ?? "The request failed",
+      body.error?.fieldErrors,
+    );
   }
   return body.data;
 };
@@ -115,7 +124,12 @@ export const SchemaEditor = ({
   publicSlug: string;
   publicBaseUrl: string;
   published: boolean;
-  versions: Array<{ id: string; publishedAt: string; versionNumber: number }>;
+  versions: Array<{
+    id: string;
+    publishedAt: string;
+    schema: FormSchemaV1;
+    versionNumber: number;
+  }>;
   workspaceSlug: string;
 }) => {
   const queryClient = useQueryClient();
@@ -128,6 +142,7 @@ export const SchemaEditor = ({
     handleSubmit,
     register,
     reset,
+    setError,
   } = form;
   const { append, fields, move, remove, update } = useFieldArray({
     control,
@@ -140,14 +155,18 @@ export const SchemaEditor = ({
     [schema],
   );
 
-  useEffect(() => {
-    const warn = (event: BeforeUnloadEvent) => {
-      if (!isDirty) return;
-      event.preventDefault();
-    };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [isDirty]);
+  useUnsavedChangesWarning(isDirty);
+
+  const applyServerErrors = (error: Error) => {
+    if (!(error instanceof ApiRequestError) || !error.fieldErrors) return;
+    for (const [fieldPath, messages] of Object.entries(error.fieldErrors)) {
+      if (fieldPath === "_root") continue;
+      setError(path(fieldPath), {
+        message: messages.join(". "),
+        type: "server",
+      });
+    }
+  };
 
   const saveMutation = useMutation({
     mutationFn: (nextSchema: FormSchemaV1) =>
@@ -167,6 +186,7 @@ export const SchemaEditor = ({
         queryKey: ["forms", workspaceSlug],
       });
     },
+    onError: applyServerErrors,
   });
   const publishMutation = useMutation({
     mutationFn: async (nextSchema: FormSchemaV1) => {
@@ -192,6 +212,7 @@ export const SchemaEditor = ({
       });
       router.refresh();
     },
+    onError: applyServerErrors,
   });
 
   const save = handleSubmit((value) => saveMutation.mutate(value));
@@ -208,62 +229,50 @@ export const SchemaEditor = ({
 
   return (
     <div>
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-tight">
-              {schema.title}
-            </h1>
-            <Badge tone={published ? "success" : "neutral"}>
-              {published ? "published" : "draft"}
-            </Badge>
-            {isDirty ? <Badge tone="warning">unsaved</Badge> : null}
-          </div>
-          <p className="mt-1 text-sm text-slate-600">/f/{publicSlug}</p>
-        </div>
-        <div className="flex gap-2">
-          <Button asChild variant="secondary">
-            <Link href={`/app/${workspaceSlug}/forms/${formId}/webhooks`}>
-              <Webhook className="size-4" /> Webhooks
-            </Link>
-          </Button>
-          {published ? (
-            <Button asChild variant="secondary">
-              <a href={`/f/${publicSlug}`} target="_blank" rel="noreferrer">
-                <Eye className="size-4" /> Open form
-              </a>
-            </Button>
-          ) : null}
-          <Button
-            disabled={
-              !canEdit ||
-              saveMutation.isPending ||
-              publishMutation.isPending ||
-              !isDirty
-            }
-            variant="secondary"
-            onClick={() => void save()}
-          >
-            <Save className="size-4" />
-            {saveMutation.isPending ? "Saving…" : "Save draft"}
-          </Button>
-          <Button
-            disabled={
-              !canEdit ||
-              publishMutation.isPending ||
-              saveMutation.isPending ||
-              fields.length === 0
-            }
-            onClick={() => void publish()}
-          >
-            <Send className="size-4" />
-            {publishMutation.isPending ? "Publishing…" : "Publish"}
-          </Button>
-        </div>
-      </div>
+      <EditorHeader
+        canPublish={
+          canEdit &&
+          !publishMutation.isPending &&
+          !saveMutation.isPending &&
+          fields.length > 0 &&
+          parsedSchema.success
+        }
+        canSave={
+          canEdit &&
+          !saveMutation.isPending &&
+          !publishMutation.isPending &&
+          isDirty &&
+          parsedSchema.success
+        }
+        dirty={isDirty}
+        formId={formId}
+        publicSlug={publicSlug}
+        published={published}
+        publishing={publishMutation.isPending}
+        saving={saveMutation.isPending}
+        title={schema.title}
+        workspaceSlug={workspaceSlug}
+        onPublish={() => void publish()}
+        onSave={() => void save()}
+      />
 
       {mutationError ? (
-        <Alert className="mb-5">{mutationError.message}</Alert>
+        <Alert className="mb-5">
+          {mutationError.message}
+          {mutationError instanceof ApiRequestError &&
+          mutationError.fieldErrors ? (
+            <ul className="mt-2 list-disc pl-5">
+              {Object.entries(mutationError.fieldErrors).flatMap(
+                ([fieldPath, messages]) =>
+                  messages.map((message) => (
+                    <li key={`${fieldPath}-${message}`}>
+                      {fieldPath === "_root" ? "schema" : fieldPath}: {message}
+                    </li>
+                  )),
+              )}
+            </ul>
+          ) : null}
+        </Alert>
       ) : null}
       {notice ? (
         <Alert className="mb-5" tone="success">
@@ -273,50 +282,7 @@ export const SchemaEditor = ({
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
         <div className="space-y-5">
-          <Card>
-            <CardContent className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="schema-title">Title</Label>
-                <Input
-                  id="schema-title"
-                  disabled={!canEdit}
-                  {...register("title")}
-                />
-              </div>
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="schema-description">Description</Label>
-                <Textarea
-                  id="schema-description"
-                  disabled={!canEdit}
-                  {...register("description")}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="submit-label">Submit button</Label>
-                <Input
-                  id="submit-label"
-                  disabled={!canEdit}
-                  {...register("settings.submitLabel")}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="success-title">Success title</Label>
-                <Input
-                  id="success-title"
-                  disabled={!canEdit}
-                  {...register("settings.successTitle")}
-                />
-              </div>
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="success-message">Success message</Label>
-                <Textarea
-                  id="success-message"
-                  disabled={!canEdit}
-                  {...register("settings.successMessage")}
-                />
-              </div>
-            </CardContent>
-          </Card>
+          <FormSettings canEdit={canEdit} register={register} />
 
           <div className="flex items-center justify-between">
             <div>
@@ -498,284 +464,20 @@ export const SchemaEditor = ({
                       />
                       Required
                     </label>
-                    {current.type === "shortText" ||
-                    current.type === "longText" ? (
-                      <>
-                        <div className="space-y-2">
-                          <Label htmlFor={`field-${index}-min-length`}>
-                            Minimum length
-                          </Label>
-                          <Input
-                            id={`field-${index}-min-length`}
-                            disabled={!canEdit}
-                            min={0}
-                            type="number"
-                            value={current.validation?.minLength ?? ""}
-                            onChange={(event) => {
-                              const { minLength: _minimum, ...rest } =
-                                current.validation ?? {};
-                              update(index, {
-                                ...current,
-                                validation: {
-                                  ...rest,
-                                  ...(event.target.value === ""
-                                    ? {}
-                                    : {
-                                        minLength: Number(event.target.value),
-                                      }),
-                                },
-                              });
-                            }}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor={`field-${index}-max-length`}>
-                            Maximum length
-                          </Label>
-                          <Input
-                            id={`field-${index}-max-length`}
-                            disabled={!canEdit}
-                            min={1}
-                            type="number"
-                            value={current.validation?.maxLength ?? ""}
-                            onChange={(event) => {
-                              const { maxLength: _maximum, ...rest } =
-                                current.validation ?? {};
-                              update(index, {
-                                ...current,
-                                validation: {
-                                  ...rest,
-                                  ...(event.target.value === ""
-                                    ? {}
-                                    : {
-                                        maxLength: Number(event.target.value),
-                                      }),
-                                },
-                              });
-                            }}
-                          />
-                        </div>
-                        <div className="space-y-2 sm:col-span-2">
-                          <Label htmlFor={`field-${index}-pattern`}>
-                            Pattern
-                          </Label>
-                          <Input
-                            id={`field-${index}-pattern`}
-                            disabled={!canEdit}
-                            placeholder="^[A-Z].*$"
-                            value={current.validation?.pattern ?? ""}
-                            onChange={(event) => {
-                              const { pattern: _pattern, ...rest } =
-                                current.validation ?? {};
-                              update(index, {
-                                ...current,
-                                validation: {
-                                  ...rest,
-                                  ...(event.target.value === ""
-                                    ? {}
-                                    : { pattern: event.target.value }),
-                                },
-                              });
-                            }}
-                          />
-                        </div>
-                      </>
-                    ) : null}
-                    {current.type === "number" ? (
-                      <>
-                        <div className="space-y-2">
-                          <Label htmlFor={`field-${index}-min`}>Minimum</Label>
-                          <Input
-                            id={`field-${index}-min`}
-                            disabled={!canEdit}
-                            type="number"
-                            value={current.validation?.min ?? ""}
-                            onChange={(event) => {
-                              const { min: _minimum, ...rest } =
-                                current.validation ?? {};
-                              update(index, {
-                                ...current,
-                                validation: {
-                                  ...rest,
-                                  ...(event.target.value === ""
-                                    ? {}
-                                    : { min: Number(event.target.value) }),
-                                },
-                              });
-                            }}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor={`field-${index}-max`}>Maximum</Label>
-                          <Input
-                            id={`field-${index}-max`}
-                            disabled={!canEdit}
-                            type="number"
-                            value={current.validation?.max ?? ""}
-                            onChange={(event) => {
-                              const { max: _maximum, ...rest } =
-                                current.validation ?? {};
-                              update(index, {
-                                ...current,
-                                validation: {
-                                  ...rest,
-                                  ...(event.target.value === ""
-                                    ? {}
-                                    : { max: Number(event.target.value) }),
-                                },
-                              });
-                            }}
-                          />
-                        </div>
-                      </>
-                    ) : null}
-                    {current.type === "date" ? (
-                      <>
-                        <div className="space-y-2">
-                          <Label htmlFor={`field-${index}-min-date`}>
-                            Earliest date
-                          </Label>
-                          <Input
-                            id={`field-${index}-min-date`}
-                            disabled={!canEdit}
-                            type="date"
-                            value={current.validation?.min ?? ""}
-                            onChange={(event) => {
-                              const { min: _minimum, ...rest } =
-                                current.validation ?? {};
-                              update(index, {
-                                ...current,
-                                validation: {
-                                  ...rest,
-                                  ...(event.target.value === ""
-                                    ? {}
-                                    : { min: event.target.value }),
-                                },
-                              });
-                            }}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor={`field-${index}-max-date`}>
-                            Latest date
-                          </Label>
-                          <Input
-                            id={`field-${index}-max-date`}
-                            disabled={!canEdit}
-                            type="date"
-                            value={current.validation?.max ?? ""}
-                            onChange={(event) => {
-                              const { max: _maximum, ...rest } =
-                                current.validation ?? {};
-                              update(index, {
-                                ...current,
-                                validation: {
-                                  ...rest,
-                                  ...(event.target.value === ""
-                                    ? {}
-                                    : { max: event.target.value }),
-                                },
-                              });
-                            }}
-                          />
-                        </div>
-                      </>
-                    ) : null}
+                    <FieldValidation
+                      canEdit={canEdit}
+                      field={current}
+                      index={index}
+                      update={(nextField) => update(index, nextField)}
+                    />
                   </div>
 
-                  {earlierFields.length > 0 ? (
-                    <fieldset className="rounded-lg border border-slate-200 p-4">
-                      <legend className="px-1 text-sm font-medium">
-                        Conditional visibility
-                      </legend>
-                      <div className="grid gap-3 sm:grid-cols-3">
-                        <Select
-                          aria-label="Visibility source field"
-                          disabled={!canEdit}
-                          value={current.visibility?.fieldKey ?? ""}
-                          onChange={(event) => {
-                            if (!event.target.value) {
-                              const {
-                                visibility: _visibility,
-                                ...withoutVisibility
-                              } = current;
-                              update(index, withoutVisibility as FormField);
-                              return;
-                            }
-                            update(index, {
-                              ...current,
-                              visibility: {
-                                fieldKey: event.target.value,
-                                operator: "equals",
-                                value: "",
-                              },
-                            });
-                          }}
-                        >
-                          <option value="">Always visible</option>
-                          {earlierFields.map((candidate) => (
-                            <option key={candidate.id} value={candidate.key}>
-                              {candidate.label}
-                            </option>
-                          ))}
-                        </Select>
-                        {current.visibility === undefined ? null : (
-                          <>
-                            <Select
-                              aria-label="Visibility operator"
-                              disabled={!canEdit}
-                              value={current.visibility.operator}
-                              onChange={(event) => {
-                                const operator = event.target
-                                  .value as VisibilityOperator;
-                                update(index, {
-                                  ...current,
-                                  visibility:
-                                    operator === "isEmpty"
-                                      ? {
-                                          fieldKey:
-                                            current.visibility?.fieldKey ?? "",
-                                          operator,
-                                        }
-                                      : {
-                                          fieldKey:
-                                            current.visibility?.fieldKey ?? "",
-                                          operator,
-                                          value:
-                                            current.visibility?.value ?? "",
-                                        },
-                                });
-                              }}
-                            >
-                              <option value="equals">equals</option>
-                              <option value="notEquals">does not equal</option>
-                              <option value="contains">contains</option>
-                              <option value="isEmpty">is empty</option>
-                            </Select>
-                            {current.visibility.operator ===
-                            "isEmpty" ? null : (
-                              <Input
-                                aria-label="Visibility comparison value"
-                                disabled={!canEdit}
-                                value={String(current.visibility.value ?? "")}
-                                onChange={(event) => {
-                                  const visibility = current.visibility;
-                                  if (!visibility) return;
-                                  update(index, {
-                                    ...current,
-                                    visibility: {
-                                      ...visibility,
-                                      value: event.target.value,
-                                    },
-                                  });
-                                }}
-                              />
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </fieldset>
-                  ) : null}
+                  <VisibilityRules
+                    canEdit={canEdit}
+                    field={current}
+                    sourceFields={earlierFields}
+                    update={(nextField) => update(index, nextField)}
+                  />
                 </CardContent>
               </Card>
             );
@@ -784,44 +486,7 @@ export const SchemaEditor = ({
 
         <aside className="xl:sticky xl:top-6 xl:self-start">
           <div className="space-y-5">
-            <Card>
-              <div className="border-b border-slate-100 px-5 py-4">
-                <h2 className="font-semibold">Preview</h2>
-                <p className="mt-1 text-sm text-slate-600">
-                  Uses the same renderer as the hosted form.
-                </p>
-              </div>
-              <CardContent>
-                {parsedSchema.success ? (
-                  <div className="[&_form>button]:mt-6 [&_form>div]:grid [&_form>div]:gap-5 [&_form>div]:sm:grid-cols-2">
-                    <h3 className="text-xl font-semibold">
-                      {parsedSchema.data.title}
-                    </h3>
-                    {parsedSchema.data.description ? (
-                      <p className="mt-2 mb-6 text-sm text-slate-600">
-                        {parsedSchema.data.description}
-                      </p>
-                    ) : null}
-                    <FormRenderer
-                      components={webRendererComponents}
-                      schema={parsedSchema.data}
-                      onSubmit={() => undefined}
-                    />
-                  </div>
-                ) : (
-                  <Alert>
-                    Preview is unavailable until the schema is valid.
-                    <ul className="mt-2 list-disc pl-5">
-                      {parsedSchema.error.issues.slice(0, 5).map((issue) => (
-                        <li key={`${issue.path.join(".")}-${issue.message}`}>
-                          {issue.path.join(".")}: {issue.message}
-                        </li>
-                      ))}
-                    </ul>
-                  </Alert>
-                )}
-              </CardContent>
-            </Card>
+            <SchemaPreview result={parsedSchema} />
             {published ? (
               <Card>
                 <div className="border-b border-slate-100 px-5 py-4">
@@ -837,34 +502,18 @@ export const SchemaEditor = ({
                 </CardContent>
               </Card>
             ) : null}
-            <Card>
-              <div className="border-b border-slate-100 px-5 py-4">
-                <h2 className="font-semibold">Version history</h2>
-              </div>
-              <CardContent>
-                {versions.length === 0 ? (
-                  <p className="text-sm text-slate-600">
-                    No published versions yet.
-                  </p>
-                ) : (
-                  <ol className="space-y-3">
-                    {versions.map((version) => (
-                      <li
-                        key={version.id}
-                        className="flex items-center justify-between text-sm"
-                      >
-                        <span className="font-medium">
-                          Version {version.versionNumber}
-                        </span>
-                        <time className="text-slate-500">
-                          {new Date(version.publishedAt).toLocaleDateString()}
-                        </time>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </CardContent>
-            </Card>
+            <VersionHistory
+              canEdit={canEdit}
+              currentSchema={schema}
+              formId={formId}
+              versions={versions}
+              workspaceSlug={workspaceSlug}
+              onRestore={(restoredSchema, versionNumber) => {
+                reset(restoredSchema);
+                setNotice(`Version ${versionNumber} restored as draft`);
+                router.refresh();
+              }}
+            />
             <Card>
               <CardContent>
                 <h2 className="font-semibold">Danger zone</h2>

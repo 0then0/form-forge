@@ -5,8 +5,8 @@ import { z } from "zod";
 
 import { requireWorkspace } from "@/auth/permissions";
 import { db } from "@/db/client";
-import { auditLogs, memberships, users } from "@/db/schema";
-import { AppError, notFoundError } from "@/lib/errors";
+import { auditLogs, memberships, users, workspaces } from "@/db/schema";
+import { AppError, forbiddenError, notFoundError } from "@/lib/errors";
 
 const manageableRoleSchema = z.enum(["owner", "editor", "viewer"]);
 const addMemberSchema = z
@@ -99,10 +99,34 @@ const ensureAnotherOwner = async (
   }
 };
 
+const verifyActorStillOwnsWorkspace = async (
+  tx: Pick<typeof db, "select">,
+  workspaceId: string,
+  actorId: string,
+) => {
+  const [actorMembership] = await tx
+    .select({ role: memberships.role })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.workspaceId, workspaceId),
+        eq(memberships.userId, actorId),
+      ),
+    )
+    .limit(1);
+  if (actorMembership?.role !== "owner") throw forbiddenError();
+};
+
 export const updateMember = async (workspaceSlug: string, input: unknown) => {
   const workspace = await requireWorkspace(workspaceSlug, "owner");
   const parsed = updateMemberSchema.parse(input);
   return db.transaction(async (tx) => {
+    await tx
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspace.id))
+      .for("update");
+    await verifyActorStillOwnsWorkspace(tx, workspace.id, workspace.user.id);
     const [existing] = await tx
       .select({ role: memberships.role })
       .from(memberships)
@@ -143,6 +167,12 @@ export const updateMember = async (workspaceSlug: string, input: unknown) => {
 export const removeMember = async (workspaceSlug: string, userId: string) => {
   const workspace = await requireWorkspace(workspaceSlug, "owner");
   return db.transaction(async (tx) => {
+    await tx
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspace.id))
+      .for("update");
+    await verifyActorStillOwnsWorkspace(tx, workspace.id, workspace.user.id);
     const [existing] = await tx
       .select({ role: memberships.role })
       .from(memberships)

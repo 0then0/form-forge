@@ -203,12 +203,69 @@ export const listFormVersions = async (
     .select({
       id: formVersions.id,
       publishedAt: formVersions.publishedAt,
+      schema: formVersions.schema,
       schemaHash: formVersions.schemaHash,
       versionNumber: formVersions.versionNumber,
     })
     .from(formVersions)
     .where(eq(formVersions.formId, formId))
     .orderBy(desc(formVersions.versionNumber));
+};
+
+export const restoreDraftFromVersion = async (
+  workspaceSlug: string,
+  formId: string,
+  versionId: string,
+) => {
+  const workspace = await requireWorkspace(workspaceSlug, "editor");
+
+  return db.transaction(async (tx) => {
+    const [form] = await tx
+      .select({ id: forms.id, status: forms.status })
+      .from(forms)
+      .where(and(eq(forms.id, formId), eq(forms.workspaceId, workspace.id)))
+      .limit(1)
+      .for("update");
+    if (!form || form.status === "archived") {
+      throw notFoundError("Form not found");
+    }
+
+    const [version] = await tx
+      .select({
+        id: formVersions.id,
+        schema: formVersions.schema,
+        versionNumber: formVersions.versionNumber,
+      })
+      .from(formVersions)
+      .where(
+        and(eq(formVersions.id, versionId), eq(formVersions.formId, formId)),
+      )
+      .limit(1);
+    if (!version) throw notFoundError("Form version not found");
+
+    const schema = formSchemaV1Schema.parse(version.schema);
+    const [updated] = await tx
+      .update(forms)
+      .set({
+        draftSchema: schema,
+        name: schema.title,
+        updatedAt: new Date(),
+      })
+      .where(eq(forms.id, form.id))
+      .returning({ draftSchema: forms.draftSchema });
+    if (!updated) throw new Error("Draft restore did not return a row");
+
+    await tx.insert(auditLogs).values({
+      action: "form.version_restored",
+      actorId: workspace.user.id,
+      metadata: { versionId: version.id, versionNumber: version.versionNumber },
+      resourceId: formId,
+      resourceType: "form",
+      workspaceId: workspace.id,
+    });
+
+    return { draftSchema: schema, versionNumber: version.versionNumber };
+  });
 };
 
 export const archiveForm = async (workspaceSlug: string, formId: string) => {

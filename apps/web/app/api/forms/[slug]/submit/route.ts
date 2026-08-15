@@ -1,12 +1,10 @@
 import { submissionRequestSchema } from "@form-forge/form-schema";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import * as Sentry from "@sentry/nextjs";
 
 import { apiError, parseJsonBody } from "@/lib/api";
 import { AppError } from "@/lib/errors";
 import { receiveSubmission } from "@/services/public-forms";
-import { dispatchPendingOutbox } from "@/services/outbox";
 
 const idempotencyKeySchema = z.string().min(1).max(200);
 
@@ -40,13 +38,6 @@ export const POST = async (
       slug,
       ...(userAgent === undefined ? {} : { userAgent }),
     });
-    try {
-      await dispatchPendingOutbox(10);
-    } catch (dispatchError) {
-      Sentry.captureException(dispatchError, {
-        tags: { operation: "submission-outbox-dispatch" },
-      });
-    }
     return NextResponse.json(
       {
         data: {

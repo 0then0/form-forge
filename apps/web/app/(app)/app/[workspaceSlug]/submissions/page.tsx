@@ -1,4 +1,5 @@
 import { SubmissionsTable } from "@/components/submissions/submissions-table";
+import { listActiveForms } from "@/services/forms";
 
 export default async function SubmissionsPage({
   params,
@@ -6,6 +7,7 @@ export default async function SubmissionsPage({
   params: Promise<{ workspaceSlug: string }>;
 }) {
   const { workspaceSlug } = await params;
+  const forms = await listActiveForms(workspaceSlug);
   return (
     <div>
       <div className="mb-6">
@@ -14,7 +16,10 @@ export default async function SubmissionsPage({
           Version-aware responses and their aggregate delivery status.
         </p>
       </div>
-      <SubmissionsTable workspaceSlug={workspaceSlug} />
+      <SubmissionsTable
+        forms={forms.map((form) => ({ id: form.id, name: form.name }))}
+        workspaceSlug={workspaceSlug}
+      />
     </div>
   );
 }

@@ -1,14 +1,9 @@
-import {
-  Badge,
-  Card,
-  CardContent,
-  CardHeader,
-  EmptyState,
-} from "@form-forge/ui";
+import { Card, CardContent, CardHeader, EmptyState } from "@form-forge/ui";
 import Link from "next/link";
 
 import { canManageMembers, requireWorkspace } from "@/auth/permissions";
 import { CreateWebhookForm } from "@/components/webhooks/create-webhook-form";
+import { WebhookEndpointCard } from "@/components/webhooks/webhook-endpoint-card";
 import { getForm } from "@/services/forms";
 import { listWebhookEndpoints } from "@/services/webhook-endpoints";
 
@@ -48,19 +43,13 @@ export default async function WebhooksPage({
           ) : (
             <div className="space-y-3">
               {endpoints.map((endpoint) => (
-                <Card key={endpoint.id}>
-                  <CardContent className="flex items-start gap-4">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium">{endpoint.name}</p>
-                      <p className="mt-1 truncate text-sm text-slate-600">
-                        {endpoint.url}
-                      </p>
-                    </div>
-                    <Badge tone={endpoint.enabled ? "success" : "neutral"}>
-                      {endpoint.enabled ? "enabled" : "disabled"}
-                    </Badge>
-                  </CardContent>
-                </Card>
+                <WebhookEndpointCard
+                  key={endpoint.id}
+                  canManage={canManageMembers(workspace.role)}
+                  endpoint={endpoint}
+                  formId={formId}
+                  workspaceSlug={workspaceSlug}
+                />
               ))}
             </div>
           )}

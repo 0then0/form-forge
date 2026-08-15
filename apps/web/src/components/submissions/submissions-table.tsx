@@ -37,16 +37,20 @@ const statusTone = {
 const columnHelper = createColumnHelper<SubmissionRow>();
 
 export const SubmissionsTable = ({
+  forms,
   workspaceSlug,
 }: {
+  forms: Array<{ id: string; name: string }>;
   workspaceSlug: string;
 }) => {
+  const [formId, setFormId] = useState("");
   const [status, setStatus] = useState("");
   const query = useInfiniteQuery({
     initialPageParam: "",
     queryFn: async ({ pageParam }) => {
       const params = new URLSearchParams();
       if (pageParam) params.set("cursor", pageParam);
+      if (formId) params.set("formId", formId);
       if (status) params.set("deliveryStatus", status);
       const response = await fetch(
         `/api/admin/workspaces/${workspaceSlug}/submissions?${params}`,
@@ -61,7 +65,7 @@ export const SubmissionsTable = ({
       return body.data;
     },
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-    queryKey: ["submissions", workspaceSlug, status],
+    queryKey: ["submissions", workspaceSlug, formId, status],
   });
   const rows = query.data?.pages.flatMap((page) => page.data) ?? [];
   const columns = useMemo(
@@ -131,6 +135,19 @@ export const SubmissionsTable = ({
           <option value="processing">Processing</option>
           <option value="succeeded">Succeeded</option>
           <option value="failed">Failed</option>
+        </Select>
+        <Select
+          aria-label="Filter by form"
+          className="w-56"
+          value={formId}
+          onChange={(event) => setFormId(event.target.value)}
+        >
+          <option value="">All forms</option>
+          {forms.map((form) => (
+            <option key={form.id} value={form.id}>
+              {form.name}
+            </option>
+          ))}
         </Select>
         <Button asChild className="ml-auto" variant="secondary">
           <a href={`/api/admin/workspaces/${workspaceSlug}/submissions/export`}>

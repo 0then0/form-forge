@@ -8,6 +8,27 @@
       "when": 1786752000000,
       "tag": "0000_initial",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786755600000,
+      "tag": "0001_delivery_reliability",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786812275740,
+      "tag": "0002_delivery-attempt-url",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786812767863,
+      "tag": "0003_active-delivery-request-url",
+      "breakpoints": true
     }
   ]
 }

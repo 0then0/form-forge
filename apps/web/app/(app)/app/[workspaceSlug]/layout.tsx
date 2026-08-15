@@ -13,7 +13,7 @@ const navigation = [
   { href: "submissions", icon: Inbox, label: "Submissions" },
   { href: "deliveries", icon: Webhook, label: "Deliveries" },
   { href: "settings", icon: Settings, label: "Settings" },
-];
+] as const;
 
 export default async function WorkspaceLayout({
   children,

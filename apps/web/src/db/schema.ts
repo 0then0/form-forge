@@ -1,4 +1,5 @@
 import type { FormSchemaV1 } from "@form-forge/form-schema";
+import { sql } from "drizzle-orm";
 import {
   boolean,
   index,
@@ -265,6 +266,9 @@ export const webhookDeliveries = pgTable(
     manualRetryCount: integer("manual_retry_count").default(0).notNull(),
     lastError: text("last_error"),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    leaseToken: uuid("lease_token"),
+    activeAttemptUrl: text("active_attempt_url"),
     ...timestamps,
   },
   (table) => [
@@ -273,6 +277,11 @@ export const webhookDeliveries = pgTable(
       table.endpointId,
     ),
     index("webhook_deliveries_status_idx").on(table.status, table.updatedAt),
+    index("webhook_deliveries_due_idx").on(
+      table.status,
+      table.nextAttemptAt,
+      table.lockedUntil,
+    ),
   ],
 );
 
@@ -288,6 +297,7 @@ export const deliveryAttempts = pgTable(
     httpStatus: integer("http_status"),
     durationMs: integer("duration_ms").notNull(),
     responseExcerpt: text("response_excerpt"),
+    requestUrl: text("request_url"),
     errorCode: varchar("error_code", { length: 80 }),
     errorMessage: text("error_message"),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
@@ -319,7 +329,12 @@ export const outboxEvents = pgTable(
       .defaultNow()
       .notNull(),
   },
-  (table) => [index("outbox_pending_idx").on(table.status, table.availableAt)],
+  (table) => [
+    index("outbox_pending_idx").on(table.status, table.availableAt),
+    uniqueIndex("outbox_active_aggregate_idx")
+      .on(table.type, table.aggregateId)
+      .where(sql`${table.status} in ('pending', 'processing', 'failed')`),
+  ],
 );
 
 export const auditLogs = pgTable(

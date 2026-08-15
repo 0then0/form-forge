@@ -1,6 +1,15 @@
 import { createEnv } from "@t3-oss/env-nextjs";
 import { z } from "zod";
 
+const base64Key = z.string().refine((value) => {
+  try {
+    const decoded = Buffer.from(value, "base64");
+    return decoded.byteLength === 32 && decoded.toString("base64") === value;
+  } catch {
+    return false;
+  }
+}, "Must be a base64-encoded 32-byte key");
+
 export const env = createEnv({
   server: {
     DATABASE_URL: z.url(),
@@ -12,8 +21,9 @@ export const env = createEnv({
     INNGEST_EVENT_KEY: z.string().min(1),
     INNGEST_SIGNING_KEY: z.string().min(1),
     SENTRY_DSN: z.url().optional().or(z.literal("")),
-    WEBHOOK_ENCRYPTION_KEY: z.string().min(1),
+    WEBHOOK_ENCRYPTION_KEY: base64Key,
     FINGERPRINT_SECRET: z.string().min(32),
+    TEST_DATABASE_URL: z.url().optional(),
   },
   client: {
     NEXT_PUBLIC_APP_URL: z.url(),
@@ -31,6 +41,7 @@ export const env = createEnv({
     SENTRY_DSN: process.env.SENTRY_DSN,
     WEBHOOK_ENCRYPTION_KEY: process.env.WEBHOOK_ENCRYPTION_KEY,
     FINGERPRINT_SECRET: process.env.FINGERPRINT_SECRET,
+    TEST_DATABASE_URL: process.env.TEST_DATABASE_URL,
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
     NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN,
   },

@@ -129,6 +129,11 @@ export default async function SubmissionDetailPage({
                                   : attempt.errorCode}{" "}
                                 · {attempt.durationMs} ms
                               </span>
+                              {attempt.requestUrl ? (
+                                <p className="mt-1 truncate text-xs text-slate-500">
+                                  {attempt.requestUrl}
+                                </p>
+                              ) : null}
                               {attempt.errorMessage ? (
                                 <p className="mt-1 text-red-700">
                                   {attempt.errorMessage}
