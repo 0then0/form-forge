@@ -7,8 +7,8 @@ export const GET = async (
 ) => {
   try {
     const { workspaceSlug } = await context.params;
-    const csv = await exportSubmissionsCsv(workspaceSlug);
-    return new Response(csv, {
+    const csvStream = await exportSubmissionsCsv(workspaceSlug);
+    return new Response(csvStream, {
       headers: {
         "Content-Disposition": `attachment; filename="form-forge-submissions-${new Date().toISOString().slice(0, 10)}.csv"`,
         "Content-Type": "text/csv; charset=utf-8",

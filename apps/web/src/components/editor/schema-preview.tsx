@@ -29,6 +29,7 @@ export const SchemaPreview = ({
           ) : null}
           <FormRenderer
             components={webRendererComponents}
+            disabled
             schema={result.data}
             onSubmit={() => undefined}
           />

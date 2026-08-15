@@ -41,6 +41,7 @@ import {
 } from "@/services/deliveries";
 import {
   createForm,
+  listFormVersions,
   publishForm,
   restoreDraftFromVersion,
   saveDraft,
@@ -102,15 +103,16 @@ const seedWorkspace = async (role: "owner" | "editor" | "viewer" = "owner") => {
 };
 
 const seedForm = async ({
+  formSchema = schema(),
   published = true,
   workspaceId,
   userId,
 }: {
+  formSchema?: FormSchemaV1;
   published?: boolean;
   userId: string;
   workspaceId: string;
 }) => {
-  const formSchema = schema();
   const [form] = await db
     .insert(forms)
     .values({
@@ -244,6 +246,54 @@ integration("submission and delivery pipeline", () => {
     }
   });
 
+  test("treats JSONB values with reordered keys as an idempotent duplicate", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const orderedSchema: FormSchemaV1 = {
+      ...schema(),
+      fields: [
+        {
+          id: crypto.randomUUID(),
+          key: "z",
+          label: "Z",
+          required: true,
+          type: "shortText",
+          width: "full",
+        },
+        {
+          id: crypto.randomUUID(),
+          key: "a",
+          label: "A",
+          required: true,
+          type: "shortText",
+          width: "full",
+        },
+      ],
+    };
+    const seeded = await seedForm({
+      formSchema: orderedSchema,
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Expected a published version");
+    const input = {
+      values: { z: "last", a: "first" },
+      versionId: seeded.version.id,
+    };
+
+    const first = await receiveSubmission({
+      idempotencyKey: "ordered-json",
+      input,
+      slug: seeded.form.slug,
+    });
+    await expect(
+      receiveSubmission({
+        idempotencyKey: "ordered-json",
+        input,
+        slug: seeded.form.slug,
+      }),
+    ).resolves.toEqual({ duplicate: true, id: first.id });
+  });
+
   test("rate limits concurrent submissions by the server fingerprint", async () => {
     const { user, workspace } = await seedWorkspace();
     const seeded = await seedForm({
@@ -278,6 +328,64 @@ integration("submission and delivery pipeline", () => {
           result.reason.code === "RATE_LIMITED",
       ),
     ).toHaveLength(4);
+  });
+
+  test("scopes submission rate limits to one form", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const first = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    const second = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!first.version || !second.version)
+      throw new Error("Expected published versions");
+    for (let index = 0; index < 20; index += 1) {
+      await receiveSubmission({
+        fallbackFingerprint: "203.0.113.20",
+        idempotencyKey: `first-form-${index}`,
+        input: { values: { name: "Ada" }, versionId: first.version.id },
+        slug: first.form.slug,
+      });
+    }
+
+    await expect(
+      receiveSubmission({
+        fallbackFingerprint: "203.0.113.20",
+        idempotencyKey: "second-form",
+        input: { values: { name: "Ada" }, versionId: second.version.id },
+        slug: second.form.slug,
+      }),
+    ).resolves.toMatchObject({ duplicate: false });
+  });
+
+  test("rejects a submission when archiving wins the form lock", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Expected a published version");
+    let pendingSubmission: ReturnType<typeof receiveSubmission> | undefined;
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(forms)
+        .set({ archivedAt: new Date(), status: "archived" })
+        .where(eq(forms.id, seeded.form.id));
+      pendingSubmission = receiveSubmission({
+        idempotencyKey: "archive-race",
+        input: { values: { name: "Ada" }, versionId: seeded.version.id },
+        slug: seeded.form.slug,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
+
+    await expect(pendingSubmission).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
   });
 
   test("snapshots active endpoint ids when the submission is accepted", async () => {
@@ -509,6 +617,42 @@ integration("submission and delivery pipeline", () => {
     expect(immutableVersion?.schema).toEqual(seeded.schema);
   });
 
+  test("paginates form versions in bounded pages", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Expected a published version");
+    await db.insert(formVersions).values(
+      Array.from({ length: 11 }, (_, index) => ({
+        formId: seeded.form.id,
+        publishedBy: user.id,
+        schema: { ...seeded.schema, title: `Version ${index + 2}` },
+        schemaHash: schemaHash({
+          ...seeded.schema,
+          title: `Version ${index + 2}`,
+        }),
+        versionNumber: index + 2,
+      })),
+    );
+
+    const firstPage = await listFormVersions(workspace.slug, seeded.form.id);
+    const secondPage = await listFormVersions(
+      workspace.slug,
+      seeded.form.id,
+      firstPage.nextCursor ?? undefined,
+    );
+
+    expect(firstPage.data).toHaveLength(10);
+    expect(firstPage.data[0]?.versionNumber).toBe(12);
+    expect(firstPage.nextCursor).toBe(3);
+    expect(secondPage.data.map((version) => version.versionNumber)).toEqual([
+      2, 1,
+    ]);
+    expect(secondPage.nextCursor).toBeNull();
+  });
+
   test("prevents concurrent removal of all workspace owners", async () => {
     const { user, workspace } = await seedWorkspace();
     const [secondOwner] = await db
@@ -566,6 +710,34 @@ integration("submission and delivery pipeline", () => {
     ]);
     expect(sender).toHaveBeenCalledTimes(1);
     expect(sent[0]).toMatchObject({ id: event.id });
+  });
+
+  test("stops reclaiming an outbox event after its retry budget", async () => {
+    const [event] = await db
+      .insert(outboxEvents)
+      .values({
+        aggregateId: crypto.randomUUID(),
+        attempts: 9,
+        payload: {},
+        type: "unsupported.event",
+      })
+      .returning({ id: outboxEvents.id });
+    if (!event) throw new Error("Could not seed poison outbox event");
+    const sender = vi.fn(async () => undefined);
+
+    await dispatchPendingOutbox(1, sender);
+    await db
+      .update(outboxEvents)
+      .set({ availableAt: new Date(0) })
+      .where(eq(outboxEvents.id, event.id));
+    await dispatchPendingOutbox(1, sender);
+
+    const [failed] = await db
+      .select({ attempts: outboxEvents.attempts, status: outboxEvents.status })
+      .from(outboxEvents)
+      .where(eq(outboxEvents.id, event.id));
+    expect(failed).toMatchObject({ attempts: 10, status: "failed" });
+    expect(sender).not.toHaveBeenCalled();
   });
 
   test("manages webhook endpoint state and rotates its one-time secret", async () => {
@@ -649,7 +821,9 @@ integration("submission and delivery pipeline", () => {
       utm: {},
     });
 
-    const csv = await exportSubmissionsCsv(workspace.slug);
+    const csv = await new Response(
+      await exportSubmissionsCsv(workspace.slug),
+    ).text();
     expect(csv).toContain(`"'=HYPERLINK(""https://example.com"")"`);
   });
 
@@ -850,6 +1024,67 @@ integration("submission and delivery pipeline", () => {
       .from(deliveryAttempts)
       .where(eq(deliveryAttempts.deliveryId, delivery.id));
     expect(attempt?.errorCode).toBe("TIMEOUT");
+  });
+
+  test("reconciles the submission after concurrent delivery completion", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Expected a published version");
+    const endpoints = await db
+      .insert(webhookEndpoints)
+      .values(
+        ["First", "Second"].map((name) => ({
+          formId: seeded.form.id,
+          name,
+          secretCiphertext: encryptWebhookSecret(`${name}-secret`),
+          url: `https://hooks.example.com/${name.toLowerCase()}`,
+        })),
+      )
+      .returning({ id: webhookEndpoints.id });
+    const [submission] = await db
+      .insert(submissions)
+      .values({
+        formId: seeded.form.id,
+        formVersionId: seeded.version.id,
+        idempotencyKey: "concurrent-deliveries",
+        normalizedValues: { name: "Ada" },
+        receivedValues: { name: "Ada" },
+        utm: {},
+      })
+      .returning({ id: submissions.id });
+    if (!submission) throw new Error("Could not seed submission");
+    const deliveries = await db
+      .insert(webhookDeliveries)
+      .values(
+        endpoints.map((endpoint) => ({
+          endpointId: endpoint.id,
+          submissionId: submission.id,
+        })),
+      )
+      .returning({ id: webhookDeliveries.id });
+    let arrived = 0;
+    let release: (() => void) | undefined;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const transport = async () => {
+      arrived += 1;
+      if (arrived === deliveries.length) release?.();
+      await barrier;
+      return { ok: true, responseExcerpt: "ok", status: 204 };
+    };
+
+    await Promise.all(
+      deliveries.map((delivery) => deliverWebhook(delivery.id, transport)),
+    );
+    const [completed] = await db
+      .select({ deliveryStatus: submissions.deliveryStatus })
+      .from(submissions)
+      .where(eq(submissions.id, submission.id));
+    expect(completed?.deliveryStatus).toBe("succeeded");
   });
 
   test("terminalizes disabled endpoints and blocks manual retry", async () => {

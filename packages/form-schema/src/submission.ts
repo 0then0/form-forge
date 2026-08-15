@@ -1,6 +1,13 @@
 import { z } from "zod";
 
 import { patternLooksSafe } from "./safe-pattern";
+import {
+  MAX_EMAIL_LENGTH,
+  MAX_LONG_TEXT_LENGTH,
+  MAX_SHORT_TEXT_LENGTH,
+  MAX_SUBMISSION_FIELDS,
+  MAX_SUBMISSION_TEXT_LENGTH,
+} from "./limits";
 import { isFieldVisible } from "./visibility";
 import type {
   FormField,
@@ -38,6 +45,16 @@ const validateField = (
         return { field: field.key, message: "Expected text" };
       }
       const normalized = value.trim();
+      const productLimit =
+        field.type === "longText"
+          ? MAX_LONG_TEXT_LENGTH
+          : MAX_SHORT_TEXT_LENGTH;
+      if (normalized.length > productLimit) {
+        return {
+          field: field.key,
+          message: `Must contain at most ${productLimit} characters`,
+        };
+      }
       const minLength = field.validation?.minLength;
       const maxLength = field.validation?.maxLength;
       if (minLength !== undefined && normalized.length < minLength) {
@@ -62,7 +79,11 @@ const validateField = (
       return normalized;
     }
     case "email": {
-      if (typeof value !== "string" || !emailSchema.safeParse(value).success) {
+      if (
+        typeof value !== "string" ||
+        value.length > MAX_EMAIL_LENGTH ||
+        !emailSchema.safeParse(value).success
+      ) {
         return { field: field.key, message: "Enter a valid email address" };
       }
       return value.trim().toLowerCase();
@@ -140,6 +161,17 @@ export const normalizeSubmission = (
   schema: FormSchemaV1,
   values: Record<string, unknown>,
 ): NormalizeSubmissionResult => {
+  if (Object.keys(values).length > MAX_SUBMISSION_FIELDS) {
+    return {
+      success: false,
+      errors: [
+        {
+          field: "_root",
+          message: `A submission can contain at most ${MAX_SUBMISSION_FIELDS} fields`,
+        },
+      ],
+    };
+  }
   const knownKeys = new Set(schema.fields.map((field) => field.key));
   const unknownKeys = Object.keys(values).filter((key) => !knownKeys.has(key));
   if (unknownKeys.length > 0) {
@@ -155,6 +187,7 @@ export const normalizeSubmission = (
   const errors: SubmissionFieldError[] = [];
   const receivedValues: Record<string, NormalizedSubmissionValue> = {};
   const normalizedValues: Record<string, NormalizedSubmissionValue> = {};
+  let totalTextLength = 0;
 
   for (const field of schema.fields) {
     // Visibility is evaluated against values from visible, valid earlier fields.
@@ -170,6 +203,16 @@ export const normalizeSubmission = (
     }
 
     if (!valueIsMissing(value)) {
+      if (typeof validated === "string") {
+        totalTextLength += validated.length;
+        if (totalTextLength > MAX_SUBMISSION_TEXT_LENGTH) {
+          errors.push({
+            field: "_root",
+            message: `Submission text can contain at most ${MAX_SUBMISSION_TEXT_LENGTH} characters`,
+          });
+          break;
+        }
+      }
       receivedValues[field.key] = validated;
       normalizedValues[field.webhookKey ?? field.key] = validated;
     }

@@ -213,4 +213,43 @@ describe("SchemaEditor", () => {
 
     expect(await screen.findByText(/Label is already reserved/)).toBeVisible();
   });
+
+  it.each(["checkbox", "date"] as const)(
+    "removes text-only state when changing a field to %s",
+    async (fieldType) => {
+      const textField = schema.fields[0];
+      if (textField?.type !== "shortText")
+        throw new Error("Expected a short text schema field");
+      const user = userEvent.setup();
+      render(
+        <SchemaEditor
+          canEdit
+          formId="form-id"
+          initialDraftRevision={revision}
+          initialSchema={{
+            ...schema,
+            fields: [{ ...textField, placeholder: "Your name" }],
+          }}
+          publicBaseUrl="http://localhost:3000"
+          publicSlug="contact"
+          published={false}
+          versions={[]}
+          workspaceSlug="workspace"
+        />,
+        { wrapper },
+      );
+
+      await user.selectOptions(screen.getByLabelText("Type"), fieldType);
+
+      await waitFor(() =>
+        expect(
+          screen.queryByText(
+            "Preview is unavailable until the schema is valid.",
+          ),
+        ).not.toBeInTheDocument(),
+      );
+      expect(screen.queryByLabelText("Placeholder")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
+    },
+  );
 });

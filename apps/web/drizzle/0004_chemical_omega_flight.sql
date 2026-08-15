@@ -1,0 +1,1 @@
+CREATE INDEX "submissions_form_fingerprint_created_idx" ON "submissions" USING btree ("form_id","fingerprint_hash","created_at");

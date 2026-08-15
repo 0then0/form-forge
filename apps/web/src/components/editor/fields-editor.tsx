@@ -73,7 +73,7 @@ export const FieldsEditor = ({
   canEdit: boolean;
   form: UseFormReturn<FormSchemaV1>;
 }) => {
-  const { control, register } = form;
+  const { control, register, unregister } = form;
   const { append, fields, move, remove, update } = useFieldArray({
     control,
     name: "fields",
@@ -153,12 +153,13 @@ export const FieldsEditor = ({
                     id={`field-${index}-type`}
                     disabled={!canEdit}
                     value={current.type}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      unregister(path(`fields.${index}.placeholder`));
                       update(
                         index,
                         makeField(event.target.value as FieldType, current),
-                      )
-                    }
+                      );
+                    }}
                   >
                     {FIELD_TYPES.map((type) => (
                       <option key={type} value={type}>

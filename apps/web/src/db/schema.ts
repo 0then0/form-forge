@@ -215,6 +215,11 @@ export const submissions = pgTable(
       table.idempotencyKey,
     ),
     index("submissions_form_created_idx").on(table.formId, table.createdAt),
+    index("submissions_form_fingerprint_created_idx").on(
+      table.formId,
+      table.fingerprintHash,
+      table.createdAt,
+    ),
   ],
 );
 

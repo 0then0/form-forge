@@ -1,10 +1,14 @@
 import { z } from "zod";
 
+import {
+  MAX_LONG_TEXT_LENGTH,
+  MAX_SHORT_TEXT_LENGTH,
+  MAX_SUBMISSION_FIELDS,
+} from "./limits";
 import { patternLooksSafe } from "./safe-pattern";
 import type { FormSchemaV1 } from "./types";
 
 const IDENTIFIER_PATTERN = /^[a-z][a-z0-9_]*$/;
-const MAX_FIELDS = 100;
 
 const visibilityRuleSchema = z
   .object({
@@ -37,47 +41,48 @@ const baseFieldShape = {
   ),
 };
 
-const textValidationSchema = z
-  .object({
-    minLength: z.number().int().min(0).max(10_000).optional(),
-    maxLength: z.number().int().min(1).max(10_000).optional(),
-    pattern: z.string().max(128).optional(),
-  })
-  .strict()
-  .superRefine((validation, context) => {
-    if (
-      validation.minLength !== undefined &&
-      validation.maxLength !== undefined &&
-      validation.minLength > validation.maxLength
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["minLength"],
-        message: "Minimum length cannot exceed maximum length",
-      });
-    }
+const textValidationSchema = (maximum: number) =>
+  z
+    .object({
+      minLength: z.number().int().min(0).max(maximum).optional(),
+      maxLength: z.number().int().min(1).max(maximum).optional(),
+      pattern: z.string().max(128).optional(),
+    })
+    .strict()
+    .superRefine((validation, context) => {
+      if (
+        validation.minLength !== undefined &&
+        validation.maxLength !== undefined &&
+        validation.minLength > validation.maxLength
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["minLength"],
+          message: "Minimum length cannot exceed maximum length",
+        });
+      }
 
-    if (validation.pattern !== undefined) {
-      if (!patternLooksSafe(validation.pattern)) {
-        context.addIssue({
-          code: "custom",
-          path: ["pattern"],
-          message:
-            "Pattern must use the safe anchored subset without groups, alternation, or multiple quantifiers",
-        });
-        return;
+      if (validation.pattern !== undefined) {
+        if (!patternLooksSafe(validation.pattern)) {
+          context.addIssue({
+            code: "custom",
+            path: ["pattern"],
+            message:
+              "Pattern must use the safe anchored subset without groups, alternation, or multiple quantifiers",
+          });
+          return;
+        }
+        try {
+          new RegExp(validation.pattern);
+        } catch {
+          context.addIssue({
+            code: "custom",
+            path: ["pattern"],
+            message: "Pattern must be a valid regular expression",
+          });
+        }
       }
-      try {
-        new RegExp(validation.pattern);
-      } catch {
-        context.addIssue({
-          code: "custom",
-          path: ["pattern"],
-          message: "Pattern must be a valid regular expression",
-        });
-      }
-    }
-  });
+    });
 
 const placeholderSchema = z.string().trim().max(160).optional();
 
@@ -86,7 +91,7 @@ const shortTextFieldSchema = z
     ...baseFieldShape,
     type: z.literal("shortText"),
     placeholder: placeholderSchema,
-    validation: textValidationSchema.optional(),
+    validation: textValidationSchema(MAX_SHORT_TEXT_LENGTH).optional(),
   })
   .strict();
 
@@ -95,7 +100,7 @@ const longTextFieldSchema = z
     ...baseFieldShape,
     type: z.literal("longText"),
     placeholder: placeholderSchema,
-    validation: textValidationSchema.optional(),
+    validation: textValidationSchema(MAX_LONG_TEXT_LENGTH).optional(),
   })
   .strict();
 
@@ -214,7 +219,7 @@ export const formSchemaV1Schema = z
     schemaVersion: z.literal(1),
     title: z.string().trim().min(1).max(160),
     description: z.string().trim().max(2_000).optional(),
-    fields: z.array(formFieldSchema).max(MAX_FIELDS),
+    fields: z.array(formFieldSchema).max(MAX_SUBMISSION_FIELDS),
     settings: z
       .object({
         submitLabel: z.string().trim().min(1).max(80),
@@ -306,15 +311,17 @@ export const formSchemaV1Schema = z
     });
   });
 
+const truncateUtm = (value: string): string => value.slice(0, 200);
+
 export const submissionContextSchema = z
   .object({
     utm: z
       .object({
-        utm_source: z.string().trim().max(200).optional(),
-        utm_medium: z.string().trim().max(200).optional(),
-        utm_campaign: z.string().trim().max(200).optional(),
-        utm_term: z.string().trim().max(200).optional(),
-        utm_content: z.string().trim().max(200).optional(),
+        utm_source: z.string().trim().transform(truncateUtm).optional(),
+        utm_medium: z.string().trim().transform(truncateUtm).optional(),
+        utm_campaign: z.string().trim().transform(truncateUtm).optional(),
+        utm_term: z.string().trim().transform(truncateUtm).optional(),
+        utm_content: z.string().trim().transform(truncateUtm).optional(),
       })
       .strict()
       .optional(),
@@ -326,7 +333,11 @@ export const submissionContextSchema = z
 export const submissionRequestSchema = z
   .object({
     versionId: z.uuid(),
-    values: z.record(z.string(), z.unknown()),
+    values: z
+      .record(z.string(), z.unknown())
+      .refine((values) => Object.keys(values).length <= MAX_SUBMISSION_FIELDS, {
+        message: `A submission can contain at most ${MAX_SUBMISSION_FIELDS} fields`,
+      }),
     context: submissionContextSchema.optional(),
   })
   .strict();

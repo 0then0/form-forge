@@ -50,6 +50,7 @@ export const VersionHistory = ({
   currentSchema,
   draftRevision,
   formId,
+  initialCursor,
   onRestore,
   versions,
   workspaceSlug,
@@ -58,6 +59,7 @@ export const VersionHistory = ({
   currentSchema: FormSchemaV1;
   draftRevision: string;
   formId: string;
+  initialCursor: number | null;
   onRestore: (
     schema: FormSchemaV1,
     versionNumber: number,
@@ -68,6 +70,35 @@ export const VersionHistory = ({
 }) => {
   const [error, setError] = useState<string>();
   const [restoringId, setRestoringId] = useState<string>();
+  const [items, setItems] = useState(versions);
+  const [cursor, setCursor] = useState(initialCursor);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+
+  const loadOlder = async () => {
+    if (cursor === null) return;
+    setError(undefined);
+    setLoadingOlder(true);
+    try {
+      const response = await fetch(
+        `/api/admin/workspaces/${workspaceSlug}/forms/${formId}/versions?cursor=${cursor}`,
+      );
+      const nextCursorHeader = response.headers.get("X-Next-Cursor");
+      const olderVersions = await readApiData<Version[]>(
+        response,
+        "Could not load older versions",
+      );
+      setItems((current) => [...current, ...olderVersions]);
+      setCursor(nextCursorHeader === null ? null : Number(nextCursorHeader));
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Could not load older versions",
+      );
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   const restore = async (version: Version) => {
     if (
@@ -117,11 +148,11 @@ export const VersionHistory = ({
       </div>
       <CardContent>
         {error ? <Alert className="mb-3">{error}</Alert> : null}
-        {versions.length === 0 ? (
+        {items.length === 0 ? (
           <p className="text-sm text-slate-600">No published versions yet.</p>
         ) : (
           <ol className="space-y-3">
-            {versions.map((version) => {
+            {items.map((version) => {
               const diff = compareSchemas(version.schema, currentSchema);
               return (
                 <li key={version.id} className="rounded-lg border p-3 text-sm">
@@ -134,7 +165,12 @@ export const VersionHistory = ({
                         className="text-xs text-slate-500"
                         dateTime={version.publishedAt}
                       >
-                        {new Date(version.publishedAt).toLocaleString()}
+                        {new Intl.DateTimeFormat("en-US", {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                          timeZone: "UTC",
+                        }).format(new Date(version.publishedAt))}{" "}
+                        UTC
                       </time>
                     </div>
                     <Dialog>
@@ -192,6 +228,16 @@ export const VersionHistory = ({
             })}
           </ol>
         )}
+        {cursor !== null ? (
+          <Button
+            className="mt-4"
+            disabled={loadingOlder}
+            variant="secondary"
+            onClick={() => void loadOlder()}
+          >
+            {loadingOlder ? "Loading…" : "Load older versions"}
+          </Button>
+        ) : null}
       </CardContent>
     </Card>
   );

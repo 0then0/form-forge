@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 const WARNING = "Discard unsaved form changes?";
 const GUARD_KEY = "__formForgeUnsavedGuard";
@@ -12,6 +12,19 @@ export const confirmClientNavigation = (): boolean =>
   );
 
 export const useUnsavedChangesWarning = (dirty: boolean) => {
+  const wasDirty = useRef(false);
+
+  useLayoutEffect(() => {
+    if (
+      wasDirty.current &&
+      !dirty &&
+      window.history.state?.[GUARD_KEY] === true
+    ) {
+      window.history.back();
+    }
+    wasDirty.current = dirty;
+  }, [dirty]);
+
   useEffect(() => {
     if (!dirty) return;
     const currentUrl = window.location.href;

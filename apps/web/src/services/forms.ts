@@ -5,7 +5,7 @@ import {
   formSchemaV1Schema,
   type FormSchemaV1,
 } from "@form-forge/form-schema";
-import { and, desc, eq, max, ne } from "drizzle-orm";
+import { and, desc, eq, lt, max, ne } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { cache } from "react";
 import { z } from "zod";
@@ -241,9 +241,11 @@ export const publishForm = async (
 export const listFormVersions = async (
   workspaceSlug: string,
   formId: string,
+  cursor?: number,
 ) => {
   await getForm(workspaceSlug, formId);
-  return db
+  const limit = 10;
+  const rows = await db
     .select({
       id: formVersions.id,
       publishedAt: formVersions.publishedAt,
@@ -252,8 +254,22 @@ export const listFormVersions = async (
       versionNumber: formVersions.versionNumber,
     })
     .from(formVersions)
-    .where(eq(formVersions.formId, formId))
-    .orderBy(desc(formVersions.versionNumber));
+    .where(
+      cursor === undefined
+        ? eq(formVersions.formId, formId)
+        : and(
+            eq(formVersions.formId, formId),
+            lt(formVersions.versionNumber, cursor),
+          ),
+    )
+    .orderBy(desc(formVersions.versionNumber))
+    .limit(limit + 1);
+  const hasMore = rows.length > limit;
+  const data = hasMore ? rows.slice(0, limit) : rows;
+  return {
+    data,
+    nextCursor: hasMore ? (data.at(-1)?.versionNumber ?? null) : null,
+  };
 };
 
 export const restoreDraftFromVersion = async (

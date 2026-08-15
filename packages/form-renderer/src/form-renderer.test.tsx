@@ -34,6 +34,35 @@ describe("FormRenderer", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     expect(onSubmit).toHaveBeenCalledWith({ email: "user@example.com" });
+    expect(screen.getByLabelText("Email *")).toHaveAttribute(
+      "aria-required",
+      "true",
+    );
+  });
+
+  it("maps server field errors back to their controls", async () => {
+    const user = userEvent.setup();
+    render(
+      <FormRenderer
+        schema={schema}
+        onSubmit={() =>
+          Promise.reject({
+            fieldErrors: { email: ["This address is blocked"] },
+          })
+        }
+      />,
+    );
+
+    await user.type(screen.getByLabelText("Email *"), "user@example.com");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(
+      (await screen.findAllByText("This address is blocked")).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByLabelText("Email *")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
   });
 
   it("shows required validation without calling submit", async () => {

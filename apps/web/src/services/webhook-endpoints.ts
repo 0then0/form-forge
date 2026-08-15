@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 
 import { requireWorkspace } from "@/auth/permissions";
@@ -9,7 +9,6 @@ import {
   auditLogs,
   forms,
   submissionEvents,
-  submissions,
   webhookDeliveries,
   webhookEndpoints,
 } from "@/db/schema";
@@ -19,7 +18,7 @@ import {
 } from "@/integration/webhooks/crypto";
 import { validateWebhookUrl } from "@/integration/webhooks/url-policy";
 import { notFoundError } from "@/lib/errors";
-import { deriveDeliveryStatus } from "@/lib/delivery-status";
+import { reconcileSubmissionDeliveryStatus } from "./submission-delivery-status";
 
 const webhookEndpointInputSchema = z
   .object({
@@ -48,7 +47,7 @@ const requireFormInWorkspace = async (workspaceId: string, formId: string) => {
 };
 
 const failPendingDeliveries = async (
-  tx: Pick<typeof db, "insert" | "select" | "update">,
+  tx: Pick<typeof db, "execute" | "insert" | "select" | "update">,
   endpointId: string,
   reason: "archived" | "disabled",
 ) => {
@@ -88,24 +87,8 @@ const failPendingDeliveries = async (
   const submissionIds = [
     ...new Set(failed.map((delivery) => delivery.submissionId)),
   ];
-  const states = await tx
-    .select({
-      status: webhookDeliveries.status,
-      submissionId: webhookDeliveries.submissionId,
-    })
-    .from(webhookDeliveries)
-    .where(inArray(webhookDeliveries.submissionId, submissionIds));
-  for (const submissionId of submissionIds) {
-    await tx
-      .update(submissions)
-      .set({
-        deliveryStatus: deriveDeliveryStatus(
-          states
-            .filter((delivery) => delivery.submissionId === submissionId)
-            .map((delivery) => delivery.status),
-        ),
-      })
-      .where(eq(submissions.id, submissionId));
+  for (const submissionId of submissionIds.sort()) {
+    await reconcileSubmissionDeliveryStatus(tx, submissionId);
   }
 };
 

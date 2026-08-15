@@ -34,7 +34,7 @@ import {
   isFinalDeliveryAttempt,
 } from "@/lib/delivery-policy";
 import { AppError, notFoundError } from "@/lib/errors";
-import { deriveDeliveryStatus } from "@/lib/delivery-status";
+import { reconcileSubmissionDeliveryStatus } from "./submission-delivery-status";
 
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000];
 
@@ -138,22 +138,6 @@ export const createDeliveriesForSubmission = async (
     return createdDeliveries.length;
   });
 
-const updateSubmissionDeliveryStatus = async (
-  executor: Pick<typeof db, "select" | "update">,
-  submissionId: string,
-) => {
-  const deliveries = await executor
-    .select({ status: webhookDeliveries.status })
-    .from(webhookDeliveries)
-    .where(eq(webhookDeliveries.submissionId, submissionId));
-  const statuses = deliveries.map((delivery) => delivery.status);
-  const aggregate = deriveDeliveryStatus(statuses);
-  await executor
-    .update(submissions)
-    .set({ deliveryStatus: aggregate })
-    .where(eq(submissions.id, submissionId));
-};
-
 export const deliverWebhook = async (
   deliveryId: string,
   transport: typeof postWebhook = postWebhook,
@@ -238,7 +222,7 @@ export const deliverWebhook = async (
         submissionId: record.submissionId,
         type: "delivery.endpoint_unavailable",
       });
-      await updateSubmissionDeliveryStatus(tx, record.submissionId);
+      await reconcileSubmissionDeliveryStatus(tx, record.submissionId);
       return true;
     });
     return terminalized
@@ -347,7 +331,7 @@ export const deliverWebhook = async (
         submissionId: record.submissionId,
         type: "delivery.endpoint_unavailable",
       });
-      await updateSubmissionDeliveryStatus(tx, record.submissionId);
+      await reconcileSubmissionDeliveryStatus(tx, record.submissionId);
     });
     return { finalAttempt: true, skipped: false, success: false };
   }
@@ -460,7 +444,7 @@ export const deliverWebhook = async (
           type: "delivery.retry_completed",
         });
       }
-      await updateSubmissionDeliveryStatus(tx, record.submissionId);
+      await reconcileSubmissionDeliveryStatus(tx, record.submissionId);
     });
     return { skipped: false, success: true };
   }
@@ -534,7 +518,7 @@ export const deliverWebhook = async (
       submissionId: record.submissionId,
       type: finalAttempt ? "delivery.failed" : "delivery.attempt_failed",
     });
-    await updateSubmissionDeliveryStatus(tx, record.submissionId);
+    await reconcileSubmissionDeliveryStatus(tx, record.submissionId);
   });
   return { finalAttempt, skipped: false, success: false };
 };
@@ -699,7 +683,7 @@ export const requestManualRetry = async (
       submissionId: delivery.submissionId,
       type: "delivery.retry_requested",
     });
-    await updateSubmissionDeliveryStatus(tx, delivery.submissionId);
+    await reconcileSubmissionDeliveryStatus(tx, delivery.submissionId);
     await tx.insert(auditLogs).values({
       action: "delivery.retry_requested",
       actorId: workspace.user.id,

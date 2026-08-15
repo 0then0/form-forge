@@ -12,6 +12,7 @@ const pool =
   globalForDb.pool ??
   new Pool({
     allowExitOnIdle: process.env.NODE_ENV === "test",
+    connectionTimeoutMillis: 5_000,
     connectionString:
       process.env.NODE_ENV === "test" && env.TEST_DATABASE_URL
         ? env.TEST_DATABASE_URL

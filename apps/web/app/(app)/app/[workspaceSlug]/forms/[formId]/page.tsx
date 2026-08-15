@@ -9,7 +9,7 @@ export default async function FormEditorPage({
   params: Promise<{ workspaceSlug: string; formId: string }>;
 }) {
   const { formId, workspaceSlug } = await params;
-  const [workspace, form, versions] = await Promise.all([
+  const [workspace, form, versionPage] = await Promise.all([
     requireWorkspace(workspaceSlug),
     getForm(workspaceSlug, formId),
     listFormVersions(workspaceSlug, formId),
@@ -24,7 +24,8 @@ export default async function FormEditorPage({
       publicSlug={form.slug}
       publicBaseUrl={env.APP_URL.replace(/\/$/, "")}
       published={form.status === "published"}
-      versions={versions.map((version) => ({
+      initialVersionCursor={versionPage.nextCursor}
+      versions={versionPage.data.map((version) => ({
         id: version.id,
         publishedAt: version.publishedAt.toISOString(),
         schema: version.schema,

@@ -5,6 +5,13 @@ export {
   submissionContextSchema,
   submissionRequestSchema,
 } from "./schema";
+export {
+  MAX_EMAIL_LENGTH,
+  MAX_LONG_TEXT_LENGTH,
+  MAX_SHORT_TEXT_LENGTH,
+  MAX_SUBMISSION_FIELDS,
+  MAX_SUBMISSION_TEXT_LENGTH,
+} from "./limits";
 export { normalizeSubmission } from "./submission";
 export { evaluateVisibilityRule, isFieldVisible } from "./visibility";
 export type {

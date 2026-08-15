@@ -57,7 +57,12 @@ export const apiError = (
             : { fieldErrors: error.fieldErrors }),
         },
       },
-      { status: error.status },
+      {
+        ...(error.code === "RATE_LIMITED"
+          ? { headers: { "Retry-After": "600" } }
+          : {}),
+        status: error.status,
+      },
     );
   }
 
@@ -76,13 +81,26 @@ export const apiError = (
 
 export const parseJsonBody = async (request: Request, maxBytes = 65_536) => {
   const contentLength = Number(request.headers.get("content-length") ?? "0");
-  if (contentLength > maxBytes) {
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
     throw new AppError("BAD_REQUEST", "Request body is too large", 413);
   }
 
-  const raw = await request.text();
-  if (new TextEncoder().encode(raw).byteLength > maxBytes) {
-    throw new AppError("BAD_REQUEST", "Request body is too large", 413);
+  const reader = request.body?.getReader();
+  const decoder = new TextDecoder();
+  let bytesRead = 0;
+  let raw = "";
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytesRead += value.byteLength;
+      if (bytesRead > maxBytes) {
+        await reader.cancel();
+        throw new AppError("BAD_REQUEST", "Request body is too large", 413);
+      }
+      raw += decoder.decode(value, { stream: true });
+    }
+    raw += decoder.decode();
   }
 
   try {

@@ -1,6 +1,9 @@
 "use client";
 
 import {
+  MAX_EMAIL_LENGTH,
+  MAX_LONG_TEXT_LENGTH,
+  MAX_SHORT_TEXT_LENGTH,
   isFieldVisible,
   normalizeSubmission,
   type FormField,
@@ -28,6 +31,22 @@ const getFieldError = (
 ): string | undefined => {
   const message = errors[key]?.message;
   return typeof message === "string" ? message : undefined;
+};
+
+const getServerFieldErrors = (
+  error: unknown,
+): Record<string, string[]> | undefined => {
+  if (typeof error !== "object" || error === null || !("fieldErrors" in error))
+    return undefined;
+  const fieldErrors = error.fieldErrors;
+  if (typeof fieldErrors !== "object" || fieldErrors === null) return undefined;
+  return Object.fromEntries(
+    Object.entries(fieldErrors).filter(
+      (entry): entry is [string, string[]] =>
+        Array.isArray(entry[1]) &&
+        entry[1].every((message) => typeof message === "string"),
+    ),
+  );
 };
 
 export const FormRenderer = ({
@@ -66,11 +85,30 @@ export const FormRenderer = ({
     try {
       await onSubmit(normalized.receivedValues);
     } catch (error) {
-      setServerError(
-        error instanceof Error
-          ? error.message
-          : "The form could not be submitted. Please try again.",
-      );
+      const fieldErrors = getServerFieldErrors(error);
+      if (fieldErrors) {
+        for (const [field, messages] of Object.entries(fieldErrors)) {
+          if (
+            field !== "_root" &&
+            schema.fields.some(({ key }) => key === field)
+          ) {
+            setError(field, { message: messages.join(". "), type: "server" });
+          }
+        }
+      }
+      const rootError = fieldErrors?._root?.join(". ");
+      if (rootError !== undefined) {
+        setServerError(rootError);
+      } else if (
+        fieldErrors === undefined ||
+        Object.keys(fieldErrors).length === 0
+      ) {
+        setServerError(
+          error instanceof Error
+            ? error.message
+            : "The form could not be submitted. Please try again.",
+        );
+      }
     }
   });
 
@@ -127,6 +165,7 @@ const RenderedField = ({
   const common = {
     "aria-describedby": describedBy || undefined,
     "aria-invalid": error === undefined ? undefined : true,
+    "aria-required": field.required,
     disabled,
     id: field.id,
   };
@@ -137,6 +176,10 @@ const RenderedField = ({
       control = (
         <components.Textarea
           {...common}
+          maxLength={Math.min(
+            field.validation?.maxLength ?? MAX_LONG_TEXT_LENGTH,
+            MAX_LONG_TEXT_LENGTH,
+          )}
           placeholder={field.placeholder}
           {...register(field.key)}
         />
@@ -192,6 +235,7 @@ const RenderedField = ({
           {...common}
           type="email"
           autoComplete="email"
+          maxLength={MAX_EMAIL_LENGTH}
           placeholder={field.placeholder}
           {...register(field.key)}
         />
@@ -202,6 +246,10 @@ const RenderedField = ({
         <components.Input
           {...common}
           type="text"
+          maxLength={Math.min(
+            field.validation?.maxLength ?? MAX_SHORT_TEXT_LENGTH,
+            MAX_SHORT_TEXT_LENGTH,
+          )}
           placeholder={field.placeholder}
           {...register(field.key)}
         />

@@ -8,6 +8,7 @@ import {
 } from "@form-forge/form-schema";
 import { and, count, eq, gt, isNull, sql } from "drizzle-orm";
 import { createHmac } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import { db } from "@/db/client";
 import {
@@ -66,6 +67,7 @@ export const getPublishedForm = async (slug: string, versionId?: string) => {
 
 const enforceSubmissionRate = async (
   executor: Pick<typeof db, "select">,
+  formId: string,
   fingerprintHash: string | null,
 ) => {
   if (!fingerprintHash) return;
@@ -75,6 +77,7 @@ const enforceSubmissionRate = async (
     .from(submissions)
     .where(
       and(
+        eq(submissions.formId, formId),
         eq(submissions.fingerprintHash, fingerprintHash),
         gt(submissions.createdAt, since),
       ),
@@ -143,8 +146,7 @@ export const receiveSubmission = async ({
   if (previous) {
     if (
       previous.formVersionId !== published.version.id ||
-      JSON.stringify(previous.receivedValues) !==
-        JSON.stringify(normalized.receivedValues)
+      !isDeepStrictEqual(previous.receivedValues, normalized.receivedValues)
     ) {
       throw new AppError(
         "CONFLICT",
@@ -162,9 +164,21 @@ export const receiveSubmission = async ({
   );
 
   return db.transaction(async (tx) => {
+    const [activeForm] = await tx
+      .select({
+        status: forms.status,
+      })
+      .from(forms)
+      .where(eq(forms.id, published.form.id))
+      .limit(1)
+      .for("update");
+    if (!activeForm || activeForm.status !== "published") {
+      throw notFoundError("Published form not found");
+    }
+
     if (fingerprintHash) {
       await tx.execute(
-        sql`select pg_advisory_xact_lock(hashtextextended(${fingerprintHash}, 0))`,
+        sql`select pg_advisory_xact_lock(hashtextextended(${`${published.form.id}:${fingerprintHash}`}, 0))`,
       );
     }
 
@@ -185,8 +199,10 @@ export const receiveSubmission = async ({
     if (existingSubmission) {
       if (
         existingSubmission.formVersionId !== published.version.id ||
-        JSON.stringify(existingSubmission.receivedValues) !==
-          JSON.stringify(normalized.receivedValues)
+        !isDeepStrictEqual(
+          existingSubmission.receivedValues,
+          normalized.receivedValues,
+        )
       ) {
         throw new AppError(
           "CONFLICT",
@@ -197,7 +213,7 @@ export const receiveSubmission = async ({
       return { id: existingSubmission.id, duplicate: true };
     }
 
-    await enforceSubmissionRate(tx, fingerprintHash);
+    await enforceSubmissionRate(tx, published.form.id, fingerprintHash);
 
     const [created] = await tx
       .insert(submissions)
@@ -237,8 +253,7 @@ export const receiveSubmission = async ({
         throw new Error("Idempotent submission could not be found");
       if (
         existing.formVersionId !== published.version.id ||
-        JSON.stringify(existing.receivedValues) !==
-          JSON.stringify(normalized.receivedValues)
+        !isDeepStrictEqual(existing.receivedValues, normalized.receivedValues)
       ) {
         throw new AppError(
           "CONFLICT",

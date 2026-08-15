@@ -4,7 +4,7 @@ import { formSchemaV1Schema, type FormSchemaV1 } from "@form-forge/form-schema";
 import { Alert, Card, CardContent } from "@form-forge/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState } from "react";
 import {
   useForm,
   useWatch,
@@ -56,10 +56,18 @@ const summarizeSchema = (
 
 const path = (value: string) => value as FieldPath<FormSchemaV1>;
 
+const escapeHtmlAttribute = (value: string): string =>
+  value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+
 export const SchemaEditor = ({
   canEdit,
   formId,
   initialDraftRevision,
+  initialVersionCursor = null,
   initialSchema,
   publicSlug,
   publicBaseUrl,
@@ -70,6 +78,7 @@ export const SchemaEditor = ({
   canEdit: boolean;
   formId: string;
   initialDraftRevision: string;
+  initialVersionCursor?: number | null;
   initialSchema: FormSchemaV1;
   publicSlug: string;
   publicBaseUrl: string;
@@ -98,6 +107,7 @@ export const SchemaEditor = ({
     () =>
       form.subscribe({
         callback: ({ values }) => {
+          setNotice(undefined);
           const next = summarizeSchema(values, lastPublishedSchema.current);
           setEditorStatus((current) =>
             current.changedSincePublish === next.changedSincePublish &&
@@ -267,6 +277,7 @@ export const SchemaEditor = ({
           publicSlug={publicSlug}
           published={published}
           versions={versions}
+          initialVersionCursor={initialVersionCursor}
           workspaceSlug={workspaceSlug}
           onRestore={(restoredSchema, versionNumber, restoredRevision) => {
             setDraftRevision(restoredRevision);
@@ -295,6 +306,7 @@ const EditorSidebar = ({
   draftRevision,
   form,
   formId,
+  initialVersionCursor,
   onRestore,
   publicBaseUrl,
   publicSlug,
@@ -306,6 +318,7 @@ const EditorSidebar = ({
   draftRevision: string;
   form: UseFormReturn<FormSchemaV1>;
   formId: string;
+  initialVersionCursor: number | null;
   onRestore: (
     schema: FormSchemaV1,
     versionNumber: number,
@@ -321,8 +334,9 @@ const EditorSidebar = ({
     control: form.control,
     compute: (value) => value,
   });
-  const parsedSchema = formSchemaV1Schema.safeParse(schema);
-  const serializedSchema = JSON.stringify(schema);
+  const deferredSchema = useDeferredValue(schema);
+  const parsedSchema = formSchemaV1Schema.safeParse(deferredSchema);
+  const serializedSchema = JSON.stringify(deferredSchema);
 
   return (
     <aside className="xl:sticky xl:top-6 xl:self-start">
@@ -340,17 +354,19 @@ const EditorSidebar = ({
             </div>
             <CardContent>
               <code className="block overflow-x-auto rounded-lg bg-slate-950 p-3 text-xs break-all whitespace-pre-wrap text-slate-100">
-                {`<iframe src="${publicBaseUrl}/f/${publicSlug}?embed=1" title="${schema.title}" loading="lazy" width="100%" height="640"></iframe>`}
+                {`<iframe src="${publicBaseUrl}/f/${publicSlug}?embed=1" title="${escapeHtmlAttribute(deferredSchema.title)}" loading="lazy" width="100%" height="640"></iframe>`}
               </code>
             </CardContent>
           </Card>
         ) : null}
         <VersionHistory
+          key={versions[0]?.id ?? "no-versions"}
           canEdit={canEdit}
-          currentSchema={schema}
+          currentSchema={deferredSchema}
           draftRevision={draftRevision}
           formId={formId}
           versions={versions}
+          initialCursor={initialVersionCursor}
           workspaceSlug={workspaceSlug}
           onRestore={onRestore}
         />

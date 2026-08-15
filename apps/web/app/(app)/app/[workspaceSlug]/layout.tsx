@@ -56,12 +56,15 @@ export default async function WorkspaceLayout({
       </header>
       <div className="mx-auto grid max-w-screen-2xl md:grid-cols-[220px_1fr]">
         <aside className="border-b border-slate-200 bg-white p-3 md:min-h-[calc(100vh-4rem)] md:border-r md:border-b-0">
-          <nav aria-label="Workspace" className="flex gap-1 md:flex-col">
+          <nav
+            aria-label="Workspace"
+            className="flex gap-1 overflow-x-auto md:flex-col md:overflow-visible"
+          >
             {navigation.map((item) => (
               <Link
                 key={item.href}
                 href={`/app/${workspaceSlug}/${item.href}`}
-                className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                className="flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
               >
                 <item.icon className="size-4" />
                 <span>{item.label}</span>

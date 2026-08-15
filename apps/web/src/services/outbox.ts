@@ -7,7 +7,6 @@ import {
   deliveryAttempts,
   outboxEvents,
   submissionEvents,
-  submissions,
   webhookDeliveries,
 } from "@/db/schema";
 import {
@@ -19,10 +18,12 @@ import {
   DELIVERY_LEASE_MS,
   isFinalDeliveryAttempt,
 } from "@/lib/delivery-policy";
-import { deriveDeliveryStatus } from "@/lib/delivery-status";
+import { reconcileSubmissionDeliveryStatus } from "./submission-delivery-status";
 
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === "string");
+
+const MAX_OUTBOX_ATTEMPTS = 10;
 
 const eventForOutbox = (event: {
   aggregateId: string;
@@ -71,7 +72,8 @@ export const dispatchPendingOutbox = async (
       from outbox_events
       where status in ('pending', 'failed', 'processing')
         and available_at <= now()
-      order by created_at
+        and attempts < ${MAX_OUTBOX_ATTEMPTS}
+      order by available_at, created_at
       for update skip locked
       limit ${Math.max(1, Math.min(limit, 100))}
     )
@@ -106,14 +108,17 @@ export const dispatchPendingOutbox = async (
         .returning({ id: outboxEvents.id });
       if (completed) sent += 1;
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      const retryLimitReached = candidate.attempts >= MAX_OUTBOX_ATTEMPTS;
       await db
         .update(outboxEvents)
         .set({
           availableAt: new Date(Date.now() + 60_000),
           lastError:
-            error instanceof Error
-              ? error.message.slice(0, 1_000)
-              : "Unknown error",
+            `${message}${retryLimitReached ? " (retry limit reached)" : ""}`.slice(
+              0,
+              1_000,
+            ),
           status: "failed",
         })
         .where(
@@ -229,24 +234,8 @@ export const enqueueDueDeliveries = async () =>
       ...new Set(recovered.map((delivery) => delivery.submissionId)),
     ];
     if (recoveredSubmissionIds.length > 0) {
-      const deliveryStates = await tx
-        .select({
-          status: webhookDeliveries.status,
-          submissionId: webhookDeliveries.submissionId,
-        })
-        .from(webhookDeliveries)
-        .where(inArray(webhookDeliveries.submissionId, recoveredSubmissionIds));
-      for (const submissionId of recoveredSubmissionIds) {
-        await tx
-          .update(submissions)
-          .set({
-            deliveryStatus: deriveDeliveryStatus(
-              deliveryStates
-                .filter((delivery) => delivery.submissionId === submissionId)
-                .map((delivery) => delivery.status),
-            ),
-          })
-          .where(eq(submissions.id, submissionId));
+      for (const submissionId of recoveredSubmissionIds.sort()) {
+        await reconcileSubmissionDeliveryStatus(tx, submissionId);
       }
     }
 

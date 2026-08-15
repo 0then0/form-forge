@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { formSchemaV1Schema } from "./schema";
+import { formSchemaV1Schema, submissionRequestSchema } from "./schema";
+import {
+  MAX_LONG_TEXT_LENGTH,
+  MAX_SHORT_TEXT_LENGTH,
+  MAX_SUBMISSION_FIELDS,
+  MAX_SUBMISSION_TEXT_LENGTH,
+} from "./limits";
 import { normalizeSubmission } from "./submission";
 import type { FormSchemaV1 } from "./types";
 
@@ -73,6 +79,69 @@ describe("FormSchemaV1", () => {
       injected: "value",
     });
     expect(result.success).toBe(false);
+  });
+
+  it("bounds field count and text independently of form validation", () => {
+    expect(
+      submissionRequestSchema.safeParse({
+        versionId: "11111111-1111-4111-8111-111111111111",
+        values: Object.fromEntries(
+          Array.from({ length: MAX_SUBMISSION_FIELDS + 1 }, (_, index) => [
+            `field_${index}`,
+            "value",
+          ]),
+        ),
+      }).success,
+    ).toBe(false);
+
+    const shortText = schema.fields[1];
+    if (!shortText) throw new Error("Expected a short text field");
+    const { visibility: _visibility, ...visibleShortText } = shortText;
+    expect(
+      normalizeSubmission(
+        { ...schema, fields: [visibleShortText] },
+        { company: "x".repeat(MAX_SHORT_TEXT_LENGTH + 1) },
+      ),
+    ).toMatchObject({ success: false });
+
+    const longTextSchema: FormSchemaV1 = {
+      ...schema,
+      fields: Array.from({ length: 7 }, (_, index) => ({
+        id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+        key: `note_${index}`,
+        label: `Note ${index}`,
+        required: true,
+        type: "longText" as const,
+        width: "full" as const,
+      })),
+    };
+    const aggregate = normalizeSubmission(
+      longTextSchema,
+      Object.fromEntries(
+        longTextSchema.fields.map((field) => [
+          field.key,
+          "x".repeat(MAX_LONG_TEXT_LENGTH),
+        ]),
+      ),
+    );
+    expect(aggregate).toEqual({
+      errors: [
+        {
+          field: "_root",
+          message: `Submission text can contain at most ${MAX_SUBMISSION_TEXT_LENGTH} characters`,
+        },
+      ],
+      success: false,
+    });
+  });
+
+  it("truncates oversized UTM metadata instead of rejecting values", () => {
+    const parsed = submissionRequestSchema.parse({
+      context: { utm: { utm_source: `  ${"x".repeat(250)}  ` } },
+      values: {},
+      versionId: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(parsed.context?.utm?.utm_source).toHaveLength(200);
   });
 
   it("rejects whitespace-only required text and omits absent optional values", () => {

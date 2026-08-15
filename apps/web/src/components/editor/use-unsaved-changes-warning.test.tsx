@@ -39,4 +39,16 @@ describe("useUnsavedChangesWarning", () => {
 
     expect(confirmClientNavigation()).toBe(false);
   });
+
+  it("removes the duplicate guard entry after changes are saved", () => {
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const { rerender } = renderHook(
+      ({ dirty }: { dirty: boolean }) => useUnsavedChangesWarning(dirty),
+      { initialProps: { dirty: true } },
+    );
+
+    rerender({ dirty: false });
+
+    expect(back).toHaveBeenCalledOnce();
+  });
 });

@@ -167,9 +167,11 @@ pnpm --filter @form-forge/web exec vitest run \
 ```
 
 The suite applies all Drizzle migrations before testing idempotency,
-submission/outbox atomicity, RBAC, concurrent publication and owner changes,
-outbox claims, expired delivery leases, webhook failures, signatures, automatic
-and manual retries, version restore, endpoint lifecycle, and CSV export safety.
+submission/outbox atomicity, per-form rate limiting, acceptance of older form
+versions, RBAC, concurrent publication and owner changes, outbox claims and
+retry exhaustion, expired delivery leases, webhook failures, signatures,
+automatic and manual retries, recovery from a corrupted endpoint secret,
+version restore, endpoint lifecycle, and safe streaming CSV export.
 
 ## Public contracts
 
@@ -193,6 +195,22 @@ The signature input is `<timestamp>.<raw-body>`. Endpoint secrets are shown once
 Submission throttling prefers the address from `X-Forwarded-For` over the
 client-generated visitor ID. In a deployment, the reverse proxy must overwrite
 this header rather than forwarding a value supplied by the caller.
+
+### Public submission limits
+
+- The request body is limited to 8,000,000 bytes.
+- `Idempotency-Key` must contain between 1 and 200 characters.
+- A form and submission may contain at most 100 fields.
+- Short-text and long-text values are limited to 10,000 characters each; email
+  values are limited to 320 characters.
+- The combined text content of one submission is limited to 64,000 characters.
+- UTM values are normalized to at most 200 characters each.
+- When a server or visitor fingerprint is available, a form accepts at most 20
+  submissions from that fingerprint in a rolling 10-minute window. A rejected
+  request returns `429` with `Retry-After: 600`.
+
+CSV export is limited to 10,000 submissions and 500 distinct submitted field
+keys. Exports are streamed and spreadsheet-formula prefixes are escaped.
 
 ## Access model
 
