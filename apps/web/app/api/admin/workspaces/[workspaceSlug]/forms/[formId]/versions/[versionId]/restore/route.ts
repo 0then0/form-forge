@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { apiError } from "@/lib/api";
+import { apiError, parseJsonBody } from "@/lib/api";
+import { z } from "zod";
 import { restoreDraftFromVersion } from "@/services/forms";
 
 type Context = {
@@ -11,11 +12,20 @@ type Context = {
   }>;
 };
 
-export const POST = async (_request: Request, context: Context) => {
+export const POST = async (request: Request, context: Context) => {
   try {
     const { formId, versionId, workspaceSlug } = await context.params;
+    const { expectedRevision } = z
+      .object({ expectedRevision: z.iso.datetime() })
+      .strict()
+      .parse(await parseJsonBody(request));
     return NextResponse.json({
-      data: await restoreDraftFromVersion(workspaceSlug, formId, versionId),
+      data: await restoreDraftFromVersion(
+        workspaceSlug,
+        formId,
+        versionId,
+        expectedRevision,
+      ),
     });
   } catch (error) {
     return apiError(error);

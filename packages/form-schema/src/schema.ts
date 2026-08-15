@@ -1,18 +1,10 @@
 import { z } from "zod";
 
+import { patternLooksSafe } from "./safe-pattern";
 import type { FormSchemaV1 } from "./types";
 
 const IDENTIFIER_PATTERN = /^[a-z][a-z0-9_]*$/;
 const MAX_FIELDS = 100;
-
-const patternLooksSafe = (pattern: string): boolean =>
-  pattern.length <= 128 &&
-  pattern.startsWith("^") &&
-  pattern.endsWith("$") &&
-  !/\\[1-9]/.test(pattern) &&
-  !/\(\?/.test(pattern) &&
-  !/\([^)]*[+*{][^)]*\)[+*{]/.test(pattern) &&
-  !/\.\*.*\.\*/.test(pattern);
 
 const visibilityRuleSchema = z
   .object({
@@ -71,7 +63,7 @@ const textValidationSchema = z
           code: "custom",
           path: ["pattern"],
           message:
-            "Pattern must be anchored and cannot use lookarounds, backreferences, or nested quantifiers",
+            "Pattern must use the safe anchored subset without groups, alternation, or multiple quantifiers",
         });
         return;
       }
@@ -281,6 +273,35 @@ export const formSchemaV1Schema = z
           path: ["fields", index, "visibility", "fieldKey"],
           message: "Visibility can only reference an earlier field",
         });
+      } else {
+        const source = schema.fields[dependencyIndex];
+        const rule = field.visibility;
+        if (!source || !rule || rule.operator === "isEmpty") return;
+        const expectedType =
+          source.type === "number"
+            ? "number"
+            : source.type === "checkbox"
+              ? "boolean"
+              : "string";
+        if (typeof rule.value !== expectedType) {
+          context.addIssue({
+            code: "custom",
+            path: ["fields", index, "visibility", "value"],
+            message: `Visibility value must be a ${expectedType}`,
+          });
+        }
+        if (
+          rule.operator === "contains" &&
+          source.type !== "shortText" &&
+          source.type !== "longText" &&
+          source.type !== "email"
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["fields", index, "visibility", "operator"],
+            message: "Contains is only available for text fields",
+          });
+        }
       }
     });
   });

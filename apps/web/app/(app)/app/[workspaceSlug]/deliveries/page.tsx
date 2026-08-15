@@ -107,7 +107,14 @@ export default async function DeliveriesPage({
             <tbody className="divide-y divide-slate-100">
               {deliveries.map((delivery) => (
                 <tr key={delivery.id}>
-                  <td className="px-4 py-3 font-medium">{delivery.formName}</td>
+                  <td className="px-4 py-3 font-medium">
+                    <Link
+                      className="hover:underline"
+                      href={`/app/${workspaceSlug}/submissions/${delivery.submissionId}`}
+                    >
+                      {delivery.formName}
+                    </Link>
+                  </td>
                   <td className="px-4 py-3">{delivery.endpointName}</td>
                   <td className="px-4 py-3">
                     <Badge tone={statusTone[delivery.status]}>
@@ -122,7 +129,10 @@ export default async function DeliveriesPage({
                     <RetryButton
                       deliveryId={delivery.id}
                       disabled={
-                        !canEdit(workspace.role) || delivery.status !== "failed"
+                        !canEdit(workspace.role) ||
+                        delivery.status !== "failed" ||
+                        !delivery.endpointEnabled ||
+                        delivery.endpointArchivedAt !== null
                       }
                       workspaceSlug={workspaceSlug}
                     />

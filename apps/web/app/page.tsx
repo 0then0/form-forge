@@ -2,6 +2,7 @@ import { Button } from "@form-forge/ui";
 import { ArrowRight, Braces, RefreshCcw, Webhook } from "lucide-react";
 import Link from "next/link";
 
+import { BrandMark } from "@/components/brand-mark";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 const features = [
@@ -27,8 +28,12 @@ export default function MarketingPage() {
   return (
     <main>
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
-        <Link href="/" className="font-semibold tracking-tight text-slate-950">
-          Form Forge
+        <Link
+          href="/"
+          className="flex items-center gap-2 font-semibold tracking-tight text-slate-950"
+        >
+          <BrandMark />
+          <span>Form Forge</span>
         </Link>
         <div className="flex items-center gap-3">
           <ThemeToggle />

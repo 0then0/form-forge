@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { requireWorkspace } from "@/auth/permissions";
+import { BrandMark } from "@/components/brand-mark";
 import { SignOutButton } from "@/components/sign-out-button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
@@ -33,9 +34,10 @@ export default async function WorkspaceLayout({
         <div className="mx-auto flex h-16 max-w-screen-2xl items-center gap-4 px-4 sm:px-6">
           <Link
             href={`/app/${workspaceSlug}/forms`}
-            className="hidden font-semibold sm:block"
+            className="hidden items-center gap-2 font-semibold sm:flex"
           >
-            Form Forge
+            <BrandMark className="size-7 rounded-md" />
+            <span>Form Forge</span>
           </Link>
           <div className="hidden h-5 w-px bg-slate-200 sm:block" />
           <WorkspaceSwitcher

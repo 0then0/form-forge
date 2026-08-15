@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader } from "@form-forge/ui";
 import { redirect } from "next/navigation";
 
 import { getSession } from "@/auth/session";
+import { BrandMark } from "@/components/brand-mark";
 import { SignInButton } from "@/components/sign-in-button";
 import { ThemeToggle } from "@/components/theme-toggle";
 
@@ -14,7 +15,10 @@ export default async function LoginPage() {
       <ThemeToggle className="absolute top-4 right-4 sm:top-6 sm:right-6" />
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <p className="text-sm font-medium text-blue-700">Form Forge</p>
+          <div className="flex items-center gap-2 text-sm font-medium text-blue-700">
+            <BrandMark />
+            <span>Form Forge</span>
+          </div>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight">
             Sign in to your workspace
           </h1>

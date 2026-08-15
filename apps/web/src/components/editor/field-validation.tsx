@@ -61,27 +61,6 @@ export const FieldValidation = ({
             }}
           />
         </div>
-        <div className="space-y-2 sm:col-span-2">
-          <Label htmlFor={`field-${index}-pattern`}>Pattern</Label>
-          <Input
-            id={`field-${index}-pattern`}
-            disabled={!canEdit}
-            placeholder="^[A-Z].*$"
-            value={field.validation?.pattern ?? ""}
-            onChange={(event) => {
-              const { pattern: _pattern, ...rest } = field.validation ?? {};
-              update({
-                ...field,
-                validation: {
-                  ...rest,
-                  ...(event.target.value === ""
-                    ? {}
-                    : { pattern: event.target.value }),
-                },
-              });
-            }}
-          />
-        </div>
       </>
     );
   }

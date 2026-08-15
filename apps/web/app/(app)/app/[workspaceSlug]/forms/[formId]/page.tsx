@@ -19,6 +19,7 @@ export default async function FormEditorPage({
     <SchemaEditor
       canEdit={canEdit(workspace.role)}
       formId={form.id}
+      initialDraftRevision={form.updatedAt.toISOString()}
       initialSchema={form.draftSchema}
       publicSlug={form.slug}
       publicBaseUrl={env.NEXT_PUBLIC_APP_URL}

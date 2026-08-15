@@ -19,8 +19,12 @@ const isTheme = (value: string | null): value is Theme =>
   value === "system" || value === "light" || value === "dark";
 
 const storedTheme = (): Theme => {
-  const value = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return isTheme(value) ? value : "system";
+  try {
+    const value = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return isTheme(value) ? value : "system";
+  } catch {
+    return "system";
+  }
 };
 
 const applyTheme = (theme: Theme) => {
@@ -57,9 +61,13 @@ export const ThemeToggle = ({ className }: { className?: string }) => {
   );
 
   const selectTheme = (nextTheme: Theme) => {
-    window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
-    applyTheme(nextTheme);
-    window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+      applyTheme(nextTheme);
+      window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
+    } catch {
+      applyTheme(nextTheme);
+    }
   };
 
   return (

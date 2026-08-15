@@ -3,6 +3,8 @@
 import { Select } from "@form-forge/ui";
 import { useRouter } from "next/navigation";
 
+import { confirmClientNavigation } from "./editor/use-unsaved-changes-warning";
+
 type Workspace = { name: string; slug: string };
 
 export const WorkspaceSwitcher = ({
@@ -20,7 +22,9 @@ export const WorkspaceSwitcher = ({
       className="h-9 w-32 py-1 sm:w-auto sm:min-w-44"
       value={currentSlug}
       onChange={(event) => {
-        router.push(`/app/${event.target.value}/forms`);
+        if (confirmClientNavigation()) {
+          router.push(`/app/${event.target.value}/forms`);
+        }
       }}
     >
       {workspaces.map((workspace) => (

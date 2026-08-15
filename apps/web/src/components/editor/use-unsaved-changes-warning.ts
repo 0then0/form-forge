@@ -3,15 +3,34 @@
 import { useEffect } from "react";
 
 const WARNING = "Discard unsaved form changes?";
+const GUARD_KEY = "__formForgeUnsavedGuard";
+const CLIENT_NAVIGATION_EVENT = "form-forge:before-client-navigation";
+
+export const confirmClientNavigation = (): boolean =>
+  window.dispatchEvent(
+    new Event(CLIENT_NAVIGATION_EVENT, { cancelable: true }),
+  );
 
 export const useUnsavedChangesWarning = (dirty: boolean) => {
   useEffect(() => {
+    if (!dirty) return;
+    const currentUrl = window.location.href;
+    const guardedState = { ...window.history.state, [GUARD_KEY]: true };
+    window.history.pushState(guardedState, "", currentUrl);
+
+    const clearGuard = () => {
+      if (window.history.state?.[GUARD_KEY] !== true) return;
+      const { [GUARD_KEY]: _guard, ...state } = window.history.state as Record<
+        string,
+        unknown
+      >;
+      window.history.replaceState(state, "", window.location.href);
+    };
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!dirty) return;
       event.preventDefault();
     };
     const beforeNavigation = (event: MouseEvent) => {
-      if (!dirty || event.defaultPrevented || event.button !== 0) return;
+      if (event.defaultPrevented || event.button !== 0) return;
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
         return;
       const target = event.target;
@@ -27,13 +46,40 @@ export const useUnsavedChangesWarning = (dirty: boolean) => {
       ) {
         return;
       }
-      if (!window.confirm(WARNING)) event.preventDefault();
+      if (!window.confirm(WARNING)) {
+        event.preventDefault();
+      } else {
+        clearGuard();
+      }
+    };
+    const beforeHistoryNavigation = () => {
+      if (window.confirm(WARNING)) {
+        window.removeEventListener("popstate", beforeHistoryNavigation);
+        window.history.back();
+        return;
+      }
+      window.history.pushState(guardedState, "", currentUrl);
+    };
+    const beforeClientNavigation = (event: Event) => {
+      if (!window.confirm(WARNING)) {
+        event.preventDefault();
+      } else {
+        clearGuard();
+      }
     };
 
     window.addEventListener("beforeunload", beforeUnload);
+    window.addEventListener("popstate", beforeHistoryNavigation);
+    window.addEventListener(CLIENT_NAVIGATION_EVENT, beforeClientNavigation);
     document.addEventListener("click", beforeNavigation, true);
     return () => {
+      clearGuard();
       window.removeEventListener("beforeunload", beforeUnload);
+      window.removeEventListener("popstate", beforeHistoryNavigation);
+      window.removeEventListener(
+        CLIENT_NAVIGATION_EVENT,
+        beforeClientNavigation,
+      );
       document.removeEventListener("click", beforeNavigation, true);
     };
   }, [dirty]);

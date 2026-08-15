@@ -48,6 +48,7 @@ const compareSchemas = (version: FormSchemaV1, draft: FormSchemaV1) => {
 export const VersionHistory = ({
   canEdit,
   currentSchema,
+  draftRevision,
   formId,
   onRestore,
   versions,
@@ -55,8 +56,13 @@ export const VersionHistory = ({
 }: {
   canEdit: boolean;
   currentSchema: FormSchemaV1;
+  draftRevision: string;
   formId: string;
-  onRestore: (schema: FormSchemaV1, versionNumber: number) => void;
+  onRestore: (
+    schema: FormSchemaV1,
+    versionNumber: number,
+    draftRevision: string,
+  ) => void;
   versions: Version[];
   workspaceSlug: string;
 }) => {
@@ -75,16 +81,28 @@ export const VersionHistory = ({
     try {
       const response = await fetch(
         `/api/admin/workspaces/${workspaceSlug}/forms/${formId}/versions/${version.id}/restore`,
-        { method: "POST" },
+        {
+          body: JSON.stringify({ expectedRevision: draftRevision }),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
       );
       const body = (await response.json()) as {
-        data?: { draftSchema: FormSchemaV1; versionNumber: number };
+        data?: {
+          draftRevision: string;
+          draftSchema: FormSchemaV1;
+          versionNumber: number;
+        };
         error?: { message: string };
       };
       if (!response.ok || !body.data) {
         throw new Error(body.error?.message ?? "Could not restore version");
       }
-      onRestore(body.data.draftSchema, body.data.versionNumber);
+      onRestore(
+        body.data.draftSchema,
+        body.data.versionNumber,
+        body.data.draftRevision,
+      );
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : "Could not restore version",

@@ -538,6 +538,8 @@ export const listWorkspaceDeliveries = async ({
   const rows = await db
     .select({
       attemptCount: webhookDeliveries.attemptCount,
+      endpointArchivedAt: webhookEndpoints.archivedAt,
+      endpointEnabled: webhookEndpoints.enabled,
       endpointName: webhookEndpoints.name,
       formName: forms.name,
       id: webhookDeliveries.id,
@@ -618,6 +620,35 @@ export const requestManualRetry = async (
       );
     }
 
+    const retryRequestedAt = new Date();
+    const [rescheduledEvent] = await tx
+      .update(outboxEvents)
+      .set({
+        availableAt: retryRequestedAt,
+        lastError: null,
+        sentAt: null,
+        status: "pending",
+      })
+      .where(
+        and(
+          eq(outboxEvents.aggregateId, deliveryId),
+          eq(outboxEvents.type, "delivery.requested"),
+          or(
+            eq(outboxEvents.status, "pending"),
+            eq(outboxEvents.status, "processing"),
+            eq(outboxEvents.status, "failed"),
+          ),
+        ),
+      )
+      .returning({ id: outboxEvents.id });
+    if (!rescheduledEvent) {
+      await tx.insert(outboxEvents).values({
+        aggregateId: deliveryId,
+        availableAt: retryRequestedAt,
+        payload: { deliveryId },
+        type: "delivery.requested",
+      });
+    }
     await tx
       .update(webhookDeliveries)
       .set({
@@ -625,19 +656,11 @@ export const requestManualRetry = async (
         leaseToken: null,
         lockedUntil: null,
         manualRetryCount: sql`${webhookDeliveries.manualRetryCount} + 1`,
-        nextAttemptAt: new Date(),
+        nextAttemptAt: retryRequestedAt,
         status: "pending",
         updatedAt: new Date(),
       })
       .where(eq(webhookDeliveries.id, deliveryId));
-    await tx
-      .insert(outboxEvents)
-      .values({
-        aggregateId: deliveryId,
-        payload: { deliveryId },
-        type: "delivery.requested",
-      })
-      .onConflictDoNothing();
     await tx.insert(submissionEvents).values({
       data: { deliveryId },
       submissionId: delivery.submissionId,

@@ -111,7 +111,9 @@ export default async function SubmissionDetailPage({
                           deliveryId={delivery.id}
                           disabled={
                             !canEdit(workspace.role) ||
-                            delivery.status !== "failed"
+                            delivery.status !== "failed" ||
+                            !delivery.endpointEnabled ||
+                            delivery.endpointArchivedAt !== null
                           }
                           workspaceSlug={workspaceSlug}
                         />
@@ -138,6 +140,11 @@ export default async function SubmissionDetailPage({
                                 <p className="mt-1 text-red-700">
                                   {attempt.errorMessage}
                                 </p>
+                              ) : null}
+                              {attempt.responseExcerpt ? (
+                                <pre className="mt-2 max-h-32 overflow-auto rounded bg-slate-100 p-2 text-xs whitespace-pre-wrap text-slate-700">
+                                  {attempt.responseExcerpt}
+                                </pre>
                               ) : null}
                             </li>
                           ))}

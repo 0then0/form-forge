@@ -1,7 +1,11 @@
 import type { FormField, VisibilityRule } from "./types";
 
 const isEmpty = (value: unknown): boolean =>
-  value === undefined || value === null || value === "" || value === false;
+  value === undefined ||
+  value === null ||
+  value === "" ||
+  value === false ||
+  (typeof value === "number" && Number.isNaN(value));
 
 export const evaluateVisibilityRule = (
   rule: VisibilityRule,

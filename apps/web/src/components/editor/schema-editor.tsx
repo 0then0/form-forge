@@ -111,6 +111,7 @@ const path = (value: string) => value as FieldPath<FormSchemaV1>;
 export const SchemaEditor = ({
   canEdit,
   formId,
+  initialDraftRevision,
   initialSchema,
   publicSlug,
   publicBaseUrl,
@@ -120,6 +121,7 @@ export const SchemaEditor = ({
 }: {
   canEdit: boolean;
   formId: string;
+  initialDraftRevision: string;
   initialSchema: FormSchemaV1;
   publicSlug: string;
   publicBaseUrl: string;
@@ -134,6 +136,7 @@ export const SchemaEditor = ({
 }) => {
   const queryClient = useQueryClient();
   const router = useRouter();
+  const [draftRevision, setDraftRevision] = useState(initialDraftRevision);
   const [notice, setNotice] = useState<string>();
   const form = useForm<FormSchemaV1>({ defaultValues: initialSchema });
   const {
@@ -160,8 +163,11 @@ export const SchemaEditor = ({
   const applyServerErrors = (error: Error) => {
     if (!(error instanceof ApiRequestError) || !error.fieldErrors) return;
     for (const [fieldPath, messages] of Object.entries(error.fieldErrors)) {
-      if (fieldPath === "_root") continue;
-      setError(path(fieldPath), {
+      if (fieldPath === "_root" || fieldPath === "schema") continue;
+      const editorPath = fieldPath.startsWith("schema.")
+        ? fieldPath.slice("schema.".length)
+        : fieldPath;
+      setError(path(editorPath), {
         message: messages.join(". "),
         type: "server",
       });
@@ -170,11 +176,18 @@ export const SchemaEditor = ({
 
   const saveMutation = useMutation({
     mutationFn: (nextSchema: FormSchemaV1) =>
-      request<{ draftSchema: FormSchemaV1 }>(
+      request<{ draftSchema: FormSchemaV1; updatedAt: string }>(
         `/api/admin/workspaces/${workspaceSlug}/forms/${formId}/draft`,
-        { body: JSON.stringify(nextSchema), method: "PUT" },
+        {
+          body: JSON.stringify({
+            expectedRevision: draftRevision,
+            schema: nextSchema,
+          }),
+          method: "PUT",
+        },
       ),
     onSuccess: (saved, submittedSchema) => {
+      setDraftRevision(saved.updatedAt);
       const changedDuringSave =
         JSON.stringify(form.getValues()) !== JSON.stringify(submittedSchema);
       reset(
@@ -189,17 +202,19 @@ export const SchemaEditor = ({
     onError: applyServerErrors,
   });
   const publishMutation = useMutation({
-    mutationFn: async (nextSchema: FormSchemaV1) => {
-      await request(
-        `/api/admin/workspaces/${workspaceSlug}/forms/${formId}/draft`,
-        { body: JSON.stringify(nextSchema), method: "PUT" },
-      );
-      return request<{ versionNumber: number }>(
+    mutationFn: (nextSchema: FormSchemaV1) =>
+      request<{ draftRevision: string; versionNumber: number }>(
         `/api/admin/workspaces/${workspaceSlug}/forms/${formId}/publish`,
-        { method: "POST" },
-      );
-    },
+        {
+          body: JSON.stringify({
+            expectedRevision: draftRevision,
+            schema: nextSchema,
+          }),
+          method: "POST",
+        },
+      ),
     onSuccess: (version, publishedSchema) => {
+      setDraftRevision(version.draftRevision);
       const changedDuringPublish =
         JSON.stringify(form.getValues()) !== JSON.stringify(publishedSchema);
       reset(
@@ -505,10 +520,12 @@ export const SchemaEditor = ({
             <VersionHistory
               canEdit={canEdit}
               currentSchema={schema}
+              draftRevision={draftRevision}
               formId={formId}
               versions={versions}
               workspaceSlug={workspaceSlug}
-              onRestore={(restoredSchema, versionNumber) => {
+              onRestore={(restoredSchema, versionNumber, restoredRevision) => {
+                setDraftRevision(restoredRevision);
                 reset(restoredSchema);
                 setNotice(`Version ${versionNumber} restored as draft`);
                 router.refresh();

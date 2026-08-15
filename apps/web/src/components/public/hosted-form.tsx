@@ -21,13 +21,17 @@ const utmKeys = [
   "utm_content",
 ] as const;
 
-const getVisitorId = (): string => {
-  const key = "form-forge-visitor-id";
-  const existing = window.localStorage.getItem(key);
-  if (existing) return existing;
-  const created = crypto.randomUUID();
-  window.localStorage.setItem(key, created);
-  return created;
+const getVisitorId = (): string | undefined => {
+  try {
+    const key = "form-forge-visitor-id";
+    const existing = window.localStorage.getItem(key);
+    if (existing) return existing;
+    const created = crypto.randomUUID();
+    window.localStorage.setItem(key, created);
+    return created;
+  } catch {
+    return undefined;
+  }
 };
 
 const getContext = (): SubmissionContext => {
@@ -39,10 +43,11 @@ const getContext = (): SubmissionContext => {
     }),
   );
   const referrer = document.referrer;
+  const visitorId = getVisitorId();
   return {
     ...(referrer ? { referrer } : {}),
     utm,
-    visitorId: getVisitorId(),
+    ...(visitorId ? { visitorId } : {}),
   };
 };
 

@@ -116,7 +116,7 @@ const seedForm = async ({
       status: published ? "published" : "draft",
       workspaceId,
     })
-    .returning({ id: forms.id, slug: forms.slug });
+    .returning({ id: forms.id, slug: forms.slug, updatedAt: forms.updatedAt });
   if (!form) throw new Error("Could not seed form");
   if (!published) return { form, schema: formSchema, version: null };
 
@@ -267,9 +267,19 @@ integration("submission and delivery pipeline", () => {
       userId: user.id,
       workspaceId: workspace.id,
     });
+    const competingSchemas = [
+      { ...seeded.schema, title: "First competing draft" },
+      { ...seeded.schema, title: "Second competing draft" },
+    ] satisfies FormSchemaV1[];
     const results = await Promise.allSettled([
-      publishForm(workspace.slug, seeded.form.id),
-      publishForm(workspace.slug, seeded.form.id),
+      publishForm(workspace.slug, seeded.form.id, {
+        expectedRevision: seeded.form.updatedAt.toISOString(),
+        schema: competingSchemas[0],
+      }),
+      publishForm(workspace.slug, seeded.form.id, {
+        expectedRevision: seeded.form.updatedAt.toISOString(),
+        schema: competingSchemas[1],
+      }),
     ]);
     expect(
       results.filter((result) => result.status === "fulfilled"),
@@ -278,11 +288,17 @@ integration("submission and delivery pipeline", () => {
       results.filter((result) => result.status === "rejected"),
     ).toHaveLength(1);
 
-    const [versionCount] = await db
-      .select({ value: count() })
+    const publishedVersions = await db
+      .select({ schema: formVersions.schema })
       .from(formVersions)
       .where(eq(formVersions.formId, seeded.form.id));
-    expect(versionCount?.value).toBe(1);
+    expect(publishedVersions).toHaveLength(1);
+    const successfulIndex = results.findIndex(
+      (result) => result.status === "fulfilled",
+    );
+    expect(publishedVersions[0]?.schema).toEqual(
+      competingSchemas[successfulIndex],
+    );
 
     const [viewer] = await db
       .insert(users)
@@ -296,7 +312,10 @@ integration("submission and delivery pipeline", () => {
     });
     auth.userId = viewer.id;
     await expect(
-      publishForm(workspace.slug, seeded.form.id),
+      publishForm(workspace.slug, seeded.form.id, {
+        expectedRevision: seeded.form.updatedAt.toISOString(),
+        schema: seeded.schema,
+      }),
     ).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
@@ -321,6 +340,7 @@ integration("submission and delivery pipeline", () => {
       workspace.slug,
       seeded.form.id,
       seeded.version.id,
+      seeded.form.updatedAt.toISOString(),
     );
     const [restored] = await db
       .select({ draftSchema: forms.draftSchema })
@@ -481,8 +501,15 @@ integration("submission and delivery pipeline", () => {
   test("recovers an expired lease and completes failed then manual retry flow", async () => {
     const { workspace } = await seedWorkspace();
     const createdForm = await createForm(workspace.slug, "Pipeline form");
-    await saveDraft(workspace.slug, createdForm.id, schema());
-    const publishedVersion = await publishForm(workspace.slug, createdForm.id);
+    const nextSchema = schema();
+    const savedForm = await saveDraft(workspace.slug, createdForm.id, {
+      expectedRevision: createdForm.updatedAt.toISOString(),
+      schema: nextSchema,
+    });
+    const publishedVersion = await publishForm(workspace.slug, createdForm.id, {
+      expectedRevision: savedForm.updatedAt.toISOString(),
+      schema: nextSchema,
+    });
     const secret = "integration-webhook-secret";
     const [endpoint] = await db
       .insert(webhookEndpoints)
@@ -560,6 +587,16 @@ integration("submission and delivery pipeline", () => {
       .set({ url: "https://hooks.example.com/recovered" })
       .where(eq(webhookEndpoints.id, endpoint.id));
     await requestManualRetry(workspace.slug, delivery.id);
+    const [retryEvent] = await db
+      .select({ availableAt: outboxEvents.availableAt })
+      .from(outboxEvents)
+      .where(
+        and(
+          eq(outboxEvents.aggregateId, delivery.id),
+          eq(outboxEvents.type, "delivery.requested"),
+        ),
+      );
+    expect(retryEvent?.availableAt.getTime()).toBeLessThanOrEqual(Date.now());
     let deliveredBody = "";
     let deliveredHeaders: Record<string, string> = {};
     let deliveredUrl = "";

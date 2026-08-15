@@ -74,4 +74,97 @@ describe("FormSchemaV1", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("keeps number visibility typed consistently", () => {
+    const numberSchema: FormSchemaV1 = {
+      ...schema,
+      fields: [
+        {
+          id: "33333333-3333-4333-8333-333333333333",
+          key: "age",
+          label: "Age",
+          required: true,
+          type: "number",
+          width: "full",
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          key: "adult_note",
+          label: "Adult note",
+          required: true,
+          type: "shortText",
+          visibility: { fieldKey: "age", operator: "equals", value: 18 },
+          width: "full",
+        },
+      ],
+    };
+    expect(formSchemaV1Schema.safeParse(numberSchema).success).toBe(true);
+    expect(
+      normalizeSubmission(numberSchema, { age: 18, adult_note: "yes" }),
+    ).toMatchObject({
+      receivedValues: { adult_note: "yes", age: 18 },
+      success: true,
+    });
+  });
+
+  it("rejects visibility values that do not match the source field", () => {
+    const invalid = {
+      ...schema,
+      fields: [
+        {
+          id: "33333333-3333-4333-8333-333333333333",
+          key: "age",
+          label: "Age",
+          required: true,
+          type: "number" as const,
+          width: "full" as const,
+        },
+        {
+          ...schema.fields[1],
+          visibility: { fieldKey: "age", operator: "equals", value: "18" },
+        },
+      ],
+    };
+    expect(formSchemaV1Schema.safeParse(invalid).success).toBe(false);
+  });
+
+  it("rejects regex patterns outside the bounded safe subset", () => {
+    const invalid = {
+      ...schema,
+      fields: [
+        {
+          ...schema.fields[1],
+          validation: { pattern: "^(a|aa)+$" },
+          visibility: undefined,
+        },
+      ],
+    };
+    expect(formSchemaV1Schema.safeParse(invalid).success).toBe(false);
+    expect(
+      formSchemaV1Schema.safeParse({
+        ...invalid,
+        fields: [
+          {
+            ...schema.fields[1],
+            validation: {
+              pattern: "^a{0,256}a{0,256}a{0,256}a{0,256}b$",
+            },
+            visibility: undefined,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      formSchemaV1Schema.safeParse({
+        ...invalid,
+        fields: [
+          {
+            ...schema.fields[1],
+            validation: { pattern: "^[A-Z].*$" },
+            visibility: undefined,
+          },
+        ],
+      }).success,
+    ).toBe(true);
+  });
 });

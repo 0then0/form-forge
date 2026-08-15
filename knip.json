@@ -8,7 +8,6 @@
         "drizzle.config.ts",
         "src/inngest/functions.ts"
       ],
-      "ignoreDependencies": ["@testing-library/user-event", "msw"],
       "project": ["**/*.{ts,tsx,css}"]
     },
     "packages/*": {

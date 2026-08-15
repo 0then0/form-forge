@@ -24,6 +24,7 @@ export const env = createEnv({
     WEBHOOK_ENCRYPTION_KEY: base64Key,
     FINGERPRINT_SECRET: z.string().min(32),
     TEST_DATABASE_URL: z.url().optional(),
+    E2E_PIPELINE_TOKEN: z.string().min(32).optional(),
   },
   client: {
     NEXT_PUBLIC_APP_URL: z.url(),
@@ -42,6 +43,7 @@ export const env = createEnv({
     WEBHOOK_ENCRYPTION_KEY: process.env.WEBHOOK_ENCRYPTION_KEY,
     FINGERPRINT_SECRET: process.env.FINGERPRINT_SECRET,
     TEST_DATABASE_URL: process.env.TEST_DATABASE_URL,
+    E2E_PIPELINE_TOKEN: process.env.E2E_PIPELINE_TOKEN,
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
     NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN,
   },

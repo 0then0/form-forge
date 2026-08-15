@@ -151,6 +151,8 @@ export const getSubmissionDetail = async (
     db
       .select({
         attemptCount: webhookDeliveries.attemptCount,
+        endpointArchivedAt: webhookEndpoints.archivedAt,
+        endpointEnabled: webhookEndpoints.enabled,
         endpointName: webhookEndpoints.name,
         endpointUrl: webhookEndpoints.url,
         id: webhookDeliveries.id,

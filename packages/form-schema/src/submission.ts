@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { patternLooksSafe } from "./safe-pattern";
 import { isFieldVisible } from "./visibility";
 import type {
   FormField,
@@ -13,7 +14,10 @@ const emailSchema = z.email();
 const dateSchema = z.iso.date();
 
 const valueIsMissing = (value: unknown): boolean =>
-  value === undefined || value === null || value === "";
+  value === undefined ||
+  value === null ||
+  value === "" ||
+  (typeof value === "number" && Number.isNaN(value));
 
 const validateField = (
   field: FormField,
@@ -49,7 +53,8 @@ const validateField = (
       }
       if (
         field.validation?.pattern !== undefined &&
-        !new RegExp(field.validation.pattern).test(normalized)
+        (!patternLooksSafe(field.validation.pattern) ||
+          !new RegExp(field.validation.pattern).test(normalized))
       ) {
         return { field: field.key, message: "Invalid format" };
       }

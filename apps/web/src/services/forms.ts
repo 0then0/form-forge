@@ -7,6 +7,7 @@ import {
 } from "@form-forge/form-schema";
 import { and, desc, eq, max, ne } from "drizzle-orm";
 import { createHash } from "node:crypto";
+import { z } from "zod";
 
 import { requireWorkspace } from "@/auth/permissions";
 import { db } from "@/db/client";
@@ -19,6 +20,26 @@ const hashSchema = (schema: FormSchemaV1): string =>
 
 const uniqueFormSlug = (name: string) =>
   `${slugify(name)}-${crypto.randomUUID().slice(0, 8)}`;
+
+const draftMutationSchema = z
+  .object({
+    expectedRevision: z.iso.datetime(),
+    schema: formSchemaV1Schema,
+  })
+  .strict();
+
+const assertDraftRevision = (actual: Date, expected: string) => {
+  if (actual.getTime() !== new Date(expected).getTime()) {
+    throw new AppError(
+      "CONFLICT",
+      "This draft changed in another session. Reload before continuing.",
+      409,
+    );
+  }
+};
+
+const nextDraftRevision = (current: Date): Date =>
+  new Date(Math.max(Date.now(), current.getTime() + 1));
 
 export const listActiveForms = async (workspaceSlug: string) => {
   const workspace = await requireWorkspace(workspaceSlug);
@@ -87,21 +108,31 @@ export const saveDraft = async (
   input: unknown,
 ) => {
   const workspace = await requireWorkspace(workspaceSlug, "editor");
-  const schema = formSchemaV1Schema.parse(input);
+  const { expectedRevision, schema } = draftMutationSchema.parse(input);
 
   return db.transaction(async (tx) => {
     const [existing] = await tx
-      .select({ id: forms.id, status: forms.status })
+      .select({
+        id: forms.id,
+        status: forms.status,
+        updatedAt: forms.updatedAt,
+      })
       .from(forms)
       .where(and(eq(forms.id, formId), eq(forms.workspaceId, workspace.id)))
-      .limit(1);
+      .limit(1)
+      .for("update");
     if (!existing || existing.status === "archived") {
       throw notFoundError("Form not found");
     }
+    assertDraftRevision(existing.updatedAt, expectedRevision);
 
     const [updated] = await tx
       .update(forms)
-      .set({ draftSchema: schema, name: schema.title, updatedAt: new Date() })
+      .set({
+        draftSchema: schema,
+        name: schema.title,
+        updatedAt: nextDraftRevision(existing.updatedAt),
+      })
       .where(eq(forms.id, formId))
       .returning();
     if (!updated) throw new Error("Draft update did not return a row");
@@ -118,8 +149,13 @@ export const saveDraft = async (
   });
 };
 
-export const publishForm = async (workspaceSlug: string, formId: string) => {
+export const publishForm = async (
+  workspaceSlug: string,
+  formId: string,
+  input: unknown,
+) => {
   const workspace = await requireWorkspace(workspaceSlug, "editor");
+  const { expectedRevision, schema } = draftMutationSchema.parse(input);
 
   return db.transaction(async (tx) => {
     const [form] = await tx
@@ -131,7 +167,7 @@ export const publishForm = async (workspaceSlug: string, formId: string) => {
     if (!form || form.status === "archived")
       throw notFoundError("Form not found");
 
-    const schema = formSchemaV1Schema.parse(form.draftSchema);
+    assertDraftRevision(form.updatedAt, expectedRevision);
     if (schema.fields.length === 0) {
       throw new AppError(
         "VALIDATION_ERROR",
@@ -173,14 +209,18 @@ export const publishForm = async (workspaceSlug: string, formId: string) => {
       .returning();
     if (!version) throw new Error("Version creation did not return a row");
 
-    await tx
+    const [updatedForm] = await tx
       .update(forms)
       .set({
+        draftSchema: schema,
+        name: schema.title,
         publishedVersionId: version.id,
         status: "published",
-        updatedAt: new Date(),
+        updatedAt: nextDraftRevision(form.updatedAt),
       })
-      .where(eq(forms.id, formId));
+      .where(eq(forms.id, formId))
+      .returning({ updatedAt: forms.updatedAt });
+    if (!updatedForm) throw new Error("Published form update returned no row");
 
     await tx.insert(auditLogs).values({
       action: "form.published",
@@ -190,7 +230,10 @@ export const publishForm = async (workspaceSlug: string, formId: string) => {
       resourceType: "form",
       workspaceId: workspace.id,
     });
-    return version;
+    return {
+      ...version,
+      draftRevision: updatedForm.updatedAt.toISOString(),
+    };
   });
 };
 
@@ -216,12 +259,17 @@ export const restoreDraftFromVersion = async (
   workspaceSlug: string,
   formId: string,
   versionId: string,
+  expectedRevision: string,
 ) => {
   const workspace = await requireWorkspace(workspaceSlug, "editor");
 
   return db.transaction(async (tx) => {
     const [form] = await tx
-      .select({ id: forms.id, status: forms.status })
+      .select({
+        id: forms.id,
+        status: forms.status,
+        updatedAt: forms.updatedAt,
+      })
       .from(forms)
       .where(and(eq(forms.id, formId), eq(forms.workspaceId, workspace.id)))
       .limit(1)
@@ -229,6 +277,10 @@ export const restoreDraftFromVersion = async (
     if (!form || form.status === "archived") {
       throw notFoundError("Form not found");
     }
+    assertDraftRevision(
+      form.updatedAt,
+      z.iso.datetime().parse(expectedRevision),
+    );
 
     const [version] = await tx
       .select({
@@ -249,10 +301,13 @@ export const restoreDraftFromVersion = async (
       .set({
         draftSchema: schema,
         name: schema.title,
-        updatedAt: new Date(),
+        updatedAt: nextDraftRevision(form.updatedAt),
       })
       .where(eq(forms.id, form.id))
-      .returning({ draftSchema: forms.draftSchema });
+      .returning({
+        draftSchema: forms.draftSchema,
+        updatedAt: forms.updatedAt,
+      });
     if (!updated) throw new Error("Draft restore did not return a row");
 
     await tx.insert(auditLogs).values({
@@ -264,7 +319,11 @@ export const restoreDraftFromVersion = async (
       workspaceId: workspace.id,
     });
 
-    return { draftSchema: schema, versionNumber: version.versionNumber };
+    return {
+      draftRevision: updated.updatedAt.toISOString(),
+      draftSchema: schema,
+      versionNumber: version.versionNumber,
+    };
   });
 };
 

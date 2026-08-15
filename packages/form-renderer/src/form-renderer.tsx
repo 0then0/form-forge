@@ -169,7 +169,9 @@ const RenderedField = ({
           {...common}
           type="number"
           placeholder={field.placeholder}
-          {...register(field.key)}
+          {...register(field.key, {
+            setValueAs: (value: unknown) => (value === "" ? "" : Number(value)),
+          })}
         />
       );
       break;

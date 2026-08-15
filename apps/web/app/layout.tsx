@@ -7,6 +7,7 @@ import { THEME_STORAGE_KEY } from "@/lib/theme";
 import "./globals.css";
 
 export const metadata: Metadata = {
+  applicationName: "Form Forge",
   title: {
     default: "Form Forge",
     template: "%s · Form Forge",
