@@ -54,6 +54,24 @@ const summarizeSchema = (
   valid: formSchemaV1Schema.safeParse(schema).success,
 });
 
+const schemaFingerprint = (schema: unknown): string => {
+  const parsed = formSchemaV1Schema.safeParse(schema);
+  if (!parsed.success) return JSON.stringify(schema);
+
+  return JSON.stringify({
+    ...parsed.data,
+    description: parsed.data.description || undefined,
+    fields: parsed.data.fields.map((field) => ({
+      ...field,
+      description: field.description || undefined,
+      ...("placeholder" in field
+        ? { placeholder: field.placeholder || undefined }
+        : {}),
+      webhookKey: field.webhookKey || undefined,
+    })),
+  });
+};
+
 const path = (value: string) => value as FieldPath<FormSchemaV1>;
 
 const escapeHtmlAttribute = (value: string): string =>
@@ -90,18 +108,16 @@ export const SchemaEditor = ({
   const router = useRouter();
   const [draftRevision, setDraftRevision] = useState(initialDraftRevision);
   const lastPublishedSchema = useRef(versions[0]?.schema);
+  const [lastSavedSchemaFingerprint, setLastSavedSchemaFingerprint] = useState(
+    () => schemaFingerprint(initialSchema),
+  );
   const [editorStatus, setEditorStatus] = useState(() =>
     summarizeSchema(initialSchema, versions[0]?.schema),
   );
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [notice, setNotice] = useState<string>();
   const form = useForm<FormSchemaV1>({ defaultValues: initialSchema });
-  const {
-    formState: { isDirty },
-    handleSubmit,
-    register,
-    reset,
-    setError,
-  } = form;
+  const { handleSubmit, register, reset, setError } = form;
 
   useEffect(
     () =>
@@ -109,6 +125,9 @@ export const SchemaEditor = ({
         callback: ({ values }) => {
           setNotice(undefined);
           const next = summarizeSchema(values, lastPublishedSchema.current);
+          setHasUnsavedChanges(
+            schemaFingerprint(values) !== lastSavedSchemaFingerprint,
+          );
           setEditorStatus((current) =>
             current.changedSincePublish === next.changedSincePublish &&
             current.fieldCount === next.fieldCount &&
@@ -119,10 +138,10 @@ export const SchemaEditor = ({
         },
         formState: { values: true },
       }),
-    [form],
+    [form, lastSavedSchemaFingerprint],
   );
 
-  useUnsavedChangesWarning(isDirty);
+  useUnsavedChangesWarning(hasUnsavedChanges);
 
   const applyServerErrors = (error: Error) => {
     if (!(error instanceof ClientApiError) || !error.fieldErrors) return;
@@ -154,9 +173,14 @@ export const SchemaEditor = ({
       setDraftRevision(saved.updatedAt);
       const changedDuringSave =
         JSON.stringify(form.getValues()) !== JSON.stringify(submittedSchema);
+      setLastSavedSchemaFingerprint(schemaFingerprint(saved.draftSchema));
       reset(
         saved.draftSchema,
         changedDuringSave ? { keepValues: true } : undefined,
+      );
+      setHasUnsavedChanges(
+        schemaFingerprint(form.getValues()) !==
+          schemaFingerprint(saved.draftSchema),
       );
       setNotice("Draft saved");
       void queryClient.invalidateQueries({
@@ -183,9 +207,14 @@ export const SchemaEditor = ({
       setEditorStatus(summarizeSchema(form.getValues(), publishedSchema));
       const changedDuringPublish =
         JSON.stringify(form.getValues()) !== JSON.stringify(publishedSchema);
+      setLastSavedSchemaFingerprint(schemaFingerprint(publishedSchema));
       reset(
         publishedSchema,
         changedDuringPublish ? { keepValues: true } : undefined,
+      );
+      setHasUnsavedChanges(
+        schemaFingerprint(form.getValues()) !==
+          schemaFingerprint(publishedSchema),
       );
       setNotice(`Version ${version.versionNumber} published`);
       void queryClient.invalidateQueries({
@@ -223,10 +252,10 @@ export const SchemaEditor = ({
           canEdit &&
           !saveMutation.isPending &&
           !publishMutation.isPending &&
-          isDirty &&
+          hasUnsavedChanges &&
           editorStatus.valid
         }
-        dirty={isDirty}
+        dirty={hasUnsavedChanges}
         form={form}
         formId={formId}
         publicSlug={publicSlug}
@@ -281,7 +310,9 @@ export const SchemaEditor = ({
           workspaceSlug={workspaceSlug}
           onRestore={(restoredSchema, versionNumber, restoredRevision) => {
             setDraftRevision(restoredRevision);
+            setLastSavedSchemaFingerprint(schemaFingerprint(restoredSchema));
             reset(restoredSchema);
+            setHasUnsavedChanges(false);
             setNotice(`Version ${versionNumber} restored as draft`);
             router.refresh();
           }}

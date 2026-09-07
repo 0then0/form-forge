@@ -139,6 +139,43 @@ describe("SchemaEditor", () => {
     expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
   });
 
+  it("does not mark a cleared optional field as an unsaved change", async () => {
+    const user = userEvent.setup();
+    render(
+      <SchemaEditor
+        canEdit
+        formId="form-id"
+        initialDraftRevision={revision}
+        initialSchema={schema}
+        publicBaseUrl="http://localhost:3000"
+        publicSlug="contact"
+        published
+        versions={[
+          {
+            id: "version-id",
+            publishedAt: revision,
+            schema,
+            versionNumber: 1,
+          },
+        ]}
+        workspaceSlug="workspace"
+      />,
+      { wrapper },
+    );
+
+    const webhookKey = screen.getByLabelText("Webhook key");
+    expect(screen.queryByText("unsaved")).not.toBeInTheDocument();
+    await user.type(webhookKey, "delivery_name");
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
+
+    await user.clear(webhookKey);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled(),
+    );
+    expect(screen.queryByText("unsaved")).not.toBeInTheDocument();
+  });
+
   it("surfaces publish conflicts without saving the draft", async () => {
     server.use(
       http.post("/api/admin/workspaces/workspace/forms/form-id/publish", () =>
