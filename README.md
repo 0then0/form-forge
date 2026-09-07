@@ -136,8 +136,10 @@ pnpm --filter @form-forge/web exec playwright install chromium
 ```
 
 The e2e scenario creates its own Auth.js database session and workspace. It
-does not require GitHub OAuth, the Inngest Dev Server, or public webhook
-receivers. It does require a dedicated disposable PostgreSQL database:
+does not call GitHub OAuth, the Inngest Dev Server, or public webhook
+receivers. Next.js environment validation still requires non-empty
+`AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` values. It also requires a dedicated
+disposable PostgreSQL database:
 
 ```sh
 createdb form_forge_e2e
