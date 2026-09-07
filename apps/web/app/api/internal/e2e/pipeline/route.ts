@@ -51,14 +51,16 @@ export const POST = async (request: Request) => {
   }
 
   if (input.advanceDue) {
-    const now = new Date();
+    // Keep this strictly in the past: a JavaScript timestamp can otherwise be
+    // marginally ahead of PostgreSQL's `now()` when the outbox query runs.
+    const dueAt = new Date(Date.now() - 1_000);
     await db
       .update(webhookDeliveries)
-      .set({ nextAttemptAt: now })
+      .set({ nextAttemptAt: dueAt })
       .where(eq(webhookDeliveries.status, "pending"));
     await db
       .update(outboxEvents)
-      .set({ availableAt: now, status: "pending" })
+      .set({ availableAt: dueAt, status: "pending" })
       .where(
         and(
           eq(outboxEvents.type, "delivery.requested"),

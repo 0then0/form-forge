@@ -13,6 +13,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { readApiData } from "@/lib/client-api";
+import { LocalDateTime } from "@/components/local-date-time";
 
 type SubmissionRow = {
   createdAt: string;
@@ -66,6 +67,12 @@ export const SubmissionsTable = ({
     queryKey: ["submissions", workspaceSlug, formId, status],
   });
   const rows = query.data?.pages.flatMap((page) => page.data) ?? [];
+  const exportParams = new URLSearchParams();
+  if (formId) exportParams.set("formId", formId);
+  if (status) exportParams.set("deliveryStatus", status);
+  const exportHref = `/api/admin/workspaces/${workspaceSlug}/submissions/export${
+    exportParams.size > 0 ? `?${exportParams}` : ""
+  }`;
   const columns = useMemo(
     () => [
       columnHelper.accessor("formName", {
@@ -104,11 +111,7 @@ export const SubmissionsTable = ({
         header: "Delivery",
       }),
       columnHelper.accessor("createdAt", {
-        cell: (cell) => (
-          <time dateTime={cell.getValue()}>
-            {new Date(cell.getValue()).toLocaleString()}
-          </time>
-        ),
+        cell: (cell) => <LocalDateTime value={cell.getValue()} />,
         header: "Received",
       }),
     ],
@@ -152,7 +155,7 @@ export const SubmissionsTable = ({
           ))}
         </Select>
         <Button asChild className="ml-auto" variant="secondary">
-          <a href={`/api/admin/workspaces/${workspaceSlug}/submissions/export`}>
+          <a href={exportHref}>
             <Download className="size-4" /> Export CSV
           </a>
         </Button>

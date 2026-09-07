@@ -34,6 +34,7 @@ import {
   isFinalDeliveryAttempt,
 } from "@/lib/delivery-policy";
 import { AppError, notFoundError } from "@/lib/errors";
+import { requireUuidParam } from "@/lib/route-params";
 import { reconcileSubmissionDeliveryStatus } from "./submission-delivery-status";
 
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000];
@@ -142,6 +143,7 @@ export const deliverWebhook = async (
   deliveryId: string,
   transport: typeof postWebhook = postWebhook,
 ) => {
+  const validDeliveryId = requireUuidParam(deliveryId, "delivery ID");
   const [record] = await db
     .select({
       attemptCount: webhookDeliveries.attemptCount,
@@ -170,7 +172,7 @@ export const deliverWebhook = async (
     .innerJoin(submissions, eq(submissions.id, webhookDeliveries.submissionId))
     .innerJoin(forms, eq(forms.id, submissions.formId))
     .innerJoin(formVersions, eq(formVersions.id, submissions.formVersionId))
-    .where(eq(webhookDeliveries.id, deliveryId))
+    .where(eq(webhookDeliveries.id, validDeliveryId))
     .limit(1);
   if (!record) throw notFoundError("Delivery not found");
   if (
@@ -181,13 +183,27 @@ export const deliverWebhook = async (
   }
 
   const now = new Date();
-  if (!record.endpointEnabled || record.endpointArchivedAt) {
-    const terminalized = await db.transaction(async (tx) => {
+  const leaseToken = crypto.randomUUID();
+  const claimed = await db.transaction(async (tx) => {
+    const [endpoint] = await tx
+      .select({
+        archivedAt: webhookEndpoints.archivedAt,
+        enabled: webhookEndpoints.enabled,
+        secret: webhookEndpoints.secretCiphertext,
+        url: webhookEndpoints.url,
+      })
+      .from(webhookEndpoints)
+      .where(eq(webhookEndpoints.id, record.endpointId))
+      .limit(1)
+      .for("update");
+    if (!endpoint) throw notFoundError("Webhook endpoint not found");
+
+    if (!endpoint.enabled || endpoint.archivedAt) {
       const [failed] = await tx
         .update(webhookDeliveries)
         .set({
           activeAttemptUrl: null,
-          lastError: record.endpointArchivedAt
+          lastError: endpoint.archivedAt
             ? "Webhook endpoint was archived"
             : "Webhook endpoint is disabled",
           leaseToken: null,
@@ -212,128 +228,71 @@ export const deliverWebhook = async (
           ),
         )
         .returning({ id: webhookDeliveries.id });
-      if (!failed) return false;
+      if (!failed) return null;
       await tx.insert(submissionEvents).values({
         data: {
           deliveryId,
           endpointId: record.endpointId,
-          reason: record.endpointArchivedAt ? "archived" : "disabled",
+          reason: endpoint.archivedAt ? "archived" : "disabled",
         },
         submissionId: record.submissionId,
         type: "delivery.endpoint_unavailable",
       });
       await reconcileSubmissionDeliveryStatus(tx, record.submissionId);
-      return true;
-    });
-    return terminalized
-      ? { finalAttempt: true, skipped: false, success: false }
-      : { skipped: true };
-  }
+      return { unavailable: true as const };
+    }
 
-  const leaseToken = crypto.randomUUID();
-  const [claimed] = await db
-    .update(webhookDeliveries)
-    .set({
-      activeAttemptUrl: sql`(
-        select ${webhookEndpoints.url}
-        from ${webhookEndpoints}
-        where ${webhookEndpoints.id} = ${webhookDeliveries.endpointId}
-      )`,
-      attemptCount: sql`${webhookDeliveries.attemptCount} + 1`,
-      leaseToken,
-      lockedUntil: new Date(now.getTime() + DELIVERY_LEASE_MS),
-      nextAttemptAt: null,
-      status: "processing",
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(webhookDeliveries.id, deliveryId),
-        or(
-          and(
-            eq(webhookDeliveries.status, "pending"),
-            or(
-              isNull(webhookDeliveries.nextAttemptAt),
-              lte(webhookDeliveries.nextAttemptAt, now),
+    const [delivery] = await tx
+      .update(webhookDeliveries)
+      .set({
+        activeAttemptUrl: endpoint.url,
+        attemptCount: sql`${webhookDeliveries.attemptCount} + 1`,
+        leaseToken,
+        lockedUntil: new Date(now.getTime() + DELIVERY_LEASE_MS),
+        nextAttemptAt: null,
+        status: "processing",
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(webhookDeliveries.id, deliveryId),
+          or(
+            and(
+              eq(webhookDeliveries.status, "pending"),
+              or(
+                isNull(webhookDeliveries.nextAttemptAt),
+                lte(webhookDeliveries.nextAttemptAt, now),
+              ),
             ),
-          ),
-          and(
-            eq(webhookDeliveries.status, "processing"),
-            or(
-              isNull(webhookDeliveries.lockedUntil),
-              lte(webhookDeliveries.lockedUntil, now),
+            and(
+              eq(webhookDeliveries.status, "processing"),
+              or(
+                isNull(webhookDeliveries.lockedUntil),
+                lte(webhookDeliveries.lockedUntil, now),
+              ),
             ),
           ),
         ),
-        sql`exists (
-          select 1
-          from ${webhookEndpoints}
-          where ${webhookEndpoints.id} = ${webhookDeliveries.endpointId}
-            and ${webhookEndpoints.enabled} = true
-            and ${webhookEndpoints.archivedAt} is null
-        )`,
-      ),
-    )
-    .returning({
-      activeAttemptUrl: webhookDeliveries.activeAttemptUrl,
-      attemptCount: webhookDeliveries.attemptCount,
-      manualRetryCount: webhookDeliveries.manualRetryCount,
-    });
+      )
+      .returning({
+        activeAttemptUrl: webhookDeliveries.activeAttemptUrl,
+        attemptCount: webhookDeliveries.attemptCount,
+        manualRetryCount: webhookDeliveries.manualRetryCount,
+      });
+    return delivery
+      ? {
+          ...delivery,
+          endpointSecret: endpoint.secret,
+          unavailable: false as const,
+        }
+      : null;
+  });
   if (!claimed) return { skipped: true };
+  if (claimed.unavailable) {
+    return { finalAttempt: true, skipped: false, success: false };
+  }
   if (!claimed.activeAttemptUrl) {
     throw new Error("Claimed delivery is missing its request URL");
-  }
-
-  const [currentEndpoint] = await db
-    .select({
-      archivedAt: webhookEndpoints.archivedAt,
-      enabled: webhookEndpoints.enabled,
-      secret: webhookEndpoints.secretCiphertext,
-      url: webhookEndpoints.url,
-    })
-    .from(webhookDeliveries)
-    .innerJoin(
-      webhookEndpoints,
-      eq(webhookEndpoints.id, webhookDeliveries.endpointId),
-    )
-    .where(eq(webhookDeliveries.id, deliveryId))
-    .limit(1);
-  if (!currentEndpoint) throw notFoundError("Webhook endpoint not found");
-  if (!currentEndpoint.enabled || currentEndpoint.archivedAt) {
-    await db.transaction(async (tx) => {
-      const [failed] = await tx
-        .update(webhookDeliveries)
-        .set({
-          activeAttemptUrl: null,
-          lastError: currentEndpoint.archivedAt
-            ? "Webhook endpoint was archived"
-            : "Webhook endpoint is disabled",
-          leaseToken: null,
-          lockedUntil: null,
-          nextAttemptAt: null,
-          status: "failed",
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(webhookDeliveries.id, deliveryId),
-            eq(webhookDeliveries.leaseToken, leaseToken),
-          ),
-        )
-        .returning({ id: webhookDeliveries.id });
-      if (!failed) return;
-      await tx.insert(submissionEvents).values({
-        data: {
-          deliveryId,
-          endpointId: record.endpointId,
-          reason: currentEndpoint.archivedAt ? "archived" : "disabled",
-        },
-        submissionId: record.submissionId,
-        type: "delivery.endpoint_unavailable",
-      });
-      await reconcileSubmissionDeliveryStatus(tx, record.submissionId);
-    });
-    return { finalAttempt: true, skipped: false, success: false };
   }
 
   const attemptNumber = claimed.attemptCount;
@@ -369,7 +328,7 @@ export const deliverWebhook = async (
   try {
     const signature = createHmac(
       "sha256",
-      decryptWebhookSecret(currentEndpoint.secret),
+      decryptWebhookSecret(claimed.endpointSecret),
     )
       .update(`${timestamp}.${body}`)
       .digest("hex");
@@ -538,7 +497,8 @@ export const listWorkspaceDeliveries = async ({
 }) => {
   const workspace = await requireWorkspace(workspaceSlug);
   const conditions: SQL[] = [eq(forms.workspaceId, workspace.id)];
-  if (formId) conditions.push(eq(forms.id, formId));
+  if (formId)
+    conditions.push(eq(forms.id, requireUuidParam(formId, "form ID")));
   if (status) conditions.push(eq(webhookDeliveries.status, status));
   if (cursor) {
     const decoded = decodeDeliveryCursor(cursor);
@@ -592,6 +552,7 @@ export const requestManualRetry = async (
   workspaceSlug: string,
   deliveryId: string,
 ) => {
+  const validDeliveryId = requireUuidParam(deliveryId, "delivery ID");
   const workspace = await requireWorkspace(workspaceSlug, "editor");
   return db.transaction(async (tx) => {
     const [delivery] = await tx
@@ -615,7 +576,7 @@ export const requestManualRetry = async (
       )
       .where(
         and(
-          eq(webhookDeliveries.id, deliveryId),
+          eq(webhookDeliveries.id, validDeliveryId),
           eq(forms.workspaceId, workspace.id),
         ),
       )
@@ -648,7 +609,7 @@ export const requestManualRetry = async (
       })
       .where(
         and(
-          eq(outboxEvents.aggregateId, deliveryId),
+          eq(outboxEvents.aggregateId, validDeliveryId),
           eq(outboxEvents.type, "delivery.requested"),
           or(
             eq(outboxEvents.status, "pending"),
@@ -660,9 +621,9 @@ export const requestManualRetry = async (
       .returning({ id: outboxEvents.id });
     if (!rescheduledEvent) {
       await tx.insert(outboxEvents).values({
-        aggregateId: deliveryId,
+        aggregateId: validDeliveryId,
         availableAt: retryRequestedAt,
-        payload: { deliveryId },
+        payload: { deliveryId: validDeliveryId },
         type: "delivery.requested",
       });
     }
@@ -677,9 +638,9 @@ export const requestManualRetry = async (
         status: "pending",
         updatedAt: new Date(),
       })
-      .where(eq(webhookDeliveries.id, deliveryId));
+      .where(eq(webhookDeliveries.id, validDeliveryId));
     await tx.insert(submissionEvents).values({
-      data: { deliveryId },
+      data: { deliveryId: validDeliveryId },
       submissionId: delivery.submissionId,
       type: "delivery.retry_requested",
     });
@@ -688,10 +649,10 @@ export const requestManualRetry = async (
       action: "delivery.retry_requested",
       actorId: workspace.user.id,
       metadata: { submissionId: delivery.submissionId },
-      resourceId: deliveryId,
+      resourceId: validDeliveryId,
       resourceType: "webhook_delivery",
       workspaceId: workspace.id,
     });
-    return { id: deliveryId, status: "pending" as const };
+    return { id: validDeliveryId, status: "pending" as const };
   });
 };

@@ -45,6 +45,7 @@ test.each([
   "https://[2001:2::1]/hook",
   "https://[2001:20::1]/hook",
   "https://[3fff::1]/hook",
+  "https://[2620:4f:8000::1]/hook",
 ])("rejects unsafe webhook URL %s", async (url) => {
   await expect(resolveWebhookTarget(url)).rejects.toMatchObject({
     code: "VALIDATION_ERROR",

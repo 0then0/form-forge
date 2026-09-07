@@ -16,5 +16,6 @@ process.env.INNGEST_SIGNING_KEY ??= "test-inngest-signing-key";
 process.env.WEBHOOK_ENCRYPTION_KEY ??= Buffer.alloc(32, 7).toString("base64");
 process.env.FINGERPRINT_SECRET ??=
   "test-fingerprint-secret-at-least-32-characters";
+process.env.TRUST_PROXY ??= "0";
 
 afterEach(cleanup);

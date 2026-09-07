@@ -4,6 +4,7 @@ import Link from "next/link";
 
 import { canEdit, requireWorkspace } from "@/auth/permissions";
 import { CreateFormButton } from "@/components/create-form-button";
+import { LocalDateTime } from "@/components/local-date-time";
 import { listActiveForms } from "@/services/forms";
 
 export default async function FormsPage({
@@ -67,12 +68,10 @@ export default async function FormsPage({
                   >
                     {form.status}
                   </Badge>
-                  <time
+                  <LocalDateTime
                     className="hidden text-sm text-slate-500 sm:block"
-                    dateTime={form.updatedAt.toISOString()}
-                  >
-                    {form.updatedAt.toISOString().slice(0, 10)} UTC
-                  </time>
+                    value={form.updatedAt}
+                  />
                 </Link>
               </li>
             ))}

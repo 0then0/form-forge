@@ -8,7 +8,7 @@ import type {
 } from "@form-forge/form-schema";
 import { Card, CardContent } from "@form-forge/ui";
 import { CheckCircle2 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 
 import { webRendererComponents } from "@/components/renderer-adapter";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -32,6 +32,35 @@ const getVisitorId = (): string | undefined => {
     return created;
   } catch {
     return undefined;
+  }
+};
+
+const getSubmissionIdempotencyKey = (
+  slug: string,
+  versionId: string,
+): string => {
+  const key = submissionIdempotencyStorageKey(slug, versionId);
+  try {
+    const existing = window.sessionStorage.getItem(key);
+    if (existing) return existing;
+    const created = crypto.randomUUID();
+    window.sessionStorage.setItem(key, created);
+    return created;
+  } catch {
+    return crypto.randomUUID();
+  }
+};
+
+const submissionIdempotencyStorageKey = (slug: string, versionId: string) =>
+  `form-forge-submission:${slug}:${versionId}`;
+
+const clearSubmissionIdempotencyKey = (slug: string, versionId: string) => {
+  try {
+    window.sessionStorage.removeItem(
+      submissionIdempotencyStorageKey(slug, versionId),
+    );
+  } catch {
+    // Storage can be unavailable in privacy-restricted browser contexts.
   }
 };
 
@@ -63,7 +92,14 @@ export const HostedForm = ({
   slug: string;
   versionId: string;
 }) => {
-  const idempotencyKey = useRef(crypto.randomUUID());
+  // Keep retries safe after a refresh without turning a browser-wide key into
+  // a cross-form identifier. A new browser session intentionally gets a new
+  // key and can submit a new response.
+  const [idempotencyKey] = useState(() =>
+    typeof window === "undefined"
+      ? crypto.randomUUID()
+      : getSubmissionIdempotencyKey(slug, versionId),
+  );
   const [submitted, setSubmitted] = useState(false);
 
   const submit = async (values: NormalizedSubmission) => {
@@ -71,7 +107,7 @@ export const HostedForm = ({
       body: JSON.stringify({ context: getContext(), values, versionId }),
       headers: {
         "Content-Type": "application/json",
-        "Idempotency-Key": idempotencyKey.current,
+        "Idempotency-Key": idempotencyKey,
       },
       method: "POST",
     });
@@ -79,6 +115,7 @@ export const HostedForm = ({
       response,
       "Your response could not be submitted",
     );
+    clearSubmissionIdempotencyKey(slug, versionId);
     setSubmitted(true);
   };
 
@@ -117,7 +154,15 @@ export const HostedForm = ({
           <CardContent className="p-6 sm:p-8">{content}</CardContent>
         </Card>
         <p className="mt-4 text-center text-xs text-slate-500">
-          Powered by Form Forge
+          Powered by{" "}
+          <a
+            className="font-medium hover:underline"
+            href="https://github.com/0then0/form-forge"
+            rel="noreferrer"
+            target="_blank"
+          >
+            Form Forge
+          </a>
         </p>
       </div>
     </main>

@@ -14,6 +14,7 @@ import { requireWorkspace } from "@/auth/permissions";
 import { db } from "@/db/client";
 import { auditLogs, forms, formVersions } from "@/db/schema";
 import { AppError, notFoundError } from "@/lib/errors";
+import { requireUuidParam } from "@/lib/route-params";
 import { slugify } from "@/lib/slug";
 
 const hashSchema = (schema: FormSchemaV1): string =>
@@ -91,11 +92,12 @@ export const createForm = async (workspaceSlug: string, name: string) => {
 };
 
 export const getForm = cache(async (workspaceSlug: string, formId: string) => {
+  const validFormId = requireUuidParam(formId, "form ID");
   const workspace = await requireWorkspace(workspaceSlug);
   const [form] = await db
     .select()
     .from(forms)
-    .where(and(eq(forms.id, formId), eq(forms.workspaceId, workspace.id)))
+    .where(and(eq(forms.id, validFormId), eq(forms.workspaceId, workspace.id)))
     .limit(1);
   if (!form || form.status === "archived")
     throw notFoundError("Form not found");
@@ -108,6 +110,7 @@ export const saveDraft = async (
   formId: string,
   input: unknown,
 ) => {
+  const validFormId = requireUuidParam(formId, "form ID");
   const workspace = await requireWorkspace(workspaceSlug, "editor");
   const { expectedRevision, schema } = draftMutationSchema.parse(input);
 
@@ -119,7 +122,9 @@ export const saveDraft = async (
         updatedAt: forms.updatedAt,
       })
       .from(forms)
-      .where(and(eq(forms.id, formId), eq(forms.workspaceId, workspace.id)))
+      .where(
+        and(eq(forms.id, validFormId), eq(forms.workspaceId, workspace.id)),
+      )
       .limit(1)
       .for("update");
     if (!existing || existing.status === "archived") {
@@ -134,7 +139,7 @@ export const saveDraft = async (
         name: schema.title,
         updatedAt: nextDraftRevision(existing.updatedAt),
       })
-      .where(eq(forms.id, formId))
+      .where(eq(forms.id, validFormId))
       .returning();
     if (!updated) throw new Error("Draft update did not return a row");
 
@@ -142,7 +147,7 @@ export const saveDraft = async (
       action: "form.draft_saved",
       actorId: workspace.user.id,
       metadata: { fieldCount: schema.fields.length },
-      resourceId: formId,
+      resourceId: validFormId,
       resourceType: "form",
       workspaceId: workspace.id,
     });
@@ -155,6 +160,7 @@ export const publishForm = async (
   formId: string,
   input: unknown,
 ) => {
+  const validFormId = requireUuidParam(formId, "form ID");
   const workspace = await requireWorkspace(workspaceSlug, "editor");
   const { expectedRevision, schema } = draftMutationSchema.parse(input);
 
@@ -162,7 +168,9 @@ export const publishForm = async (
     const [form] = await tx
       .select()
       .from(forms)
-      .where(and(eq(forms.id, formId), eq(forms.workspaceId, workspace.id)))
+      .where(
+        and(eq(forms.id, validFormId), eq(forms.workspaceId, workspace.id)),
+      )
       .limit(1)
       .for("update");
     if (!form || form.status === "archived")
@@ -195,13 +203,13 @@ export const publishForm = async (
     const [latest] = await tx
       .select({ value: max(formVersions.versionNumber) })
       .from(formVersions)
-      .where(eq(formVersions.formId, formId));
+      .where(eq(formVersions.formId, validFormId));
     const versionNumber = (latest?.value ?? 0) + 1;
 
     const [version] = await tx
       .insert(formVersions)
       .values({
-        formId,
+        formId: validFormId,
         publishedBy: workspace.user.id,
         schema,
         schemaHash,
@@ -219,7 +227,7 @@ export const publishForm = async (
         status: "published",
         updatedAt: nextDraftRevision(form.updatedAt),
       })
-      .where(eq(forms.id, formId))
+      .where(eq(forms.id, validFormId))
       .returning({ updatedAt: forms.updatedAt });
     if (!updatedForm) throw new Error("Published form update returned no row");
 
@@ -227,7 +235,7 @@ export const publishForm = async (
       action: "form.published",
       actorId: workspace.user.id,
       metadata: { schemaHash, versionNumber },
-      resourceId: formId,
+      resourceId: validFormId,
       resourceType: "form",
       workspaceId: workspace.id,
     });
@@ -243,7 +251,8 @@ export const listFormVersions = async (
   formId: string,
   cursor?: number,
 ) => {
-  await getForm(workspaceSlug, formId);
+  const validFormId = requireUuidParam(formId, "form ID");
+  await getForm(workspaceSlug, validFormId);
   const limit = 10;
   const rows = await db
     .select({
@@ -256,9 +265,9 @@ export const listFormVersions = async (
     .from(formVersions)
     .where(
       cursor === undefined
-        ? eq(formVersions.formId, formId)
+        ? eq(formVersions.formId, validFormId)
         : and(
-            eq(formVersions.formId, formId),
+            eq(formVersions.formId, validFormId),
             lt(formVersions.versionNumber, cursor),
           ),
     )
@@ -278,6 +287,8 @@ export const restoreDraftFromVersion = async (
   versionId: string,
   expectedRevision: string,
 ) => {
+  const validFormId = requireUuidParam(formId, "form ID");
+  const validVersionId = requireUuidParam(versionId, "version ID");
   const workspace = await requireWorkspace(workspaceSlug, "editor");
 
   return db.transaction(async (tx) => {
@@ -288,7 +299,9 @@ export const restoreDraftFromVersion = async (
         updatedAt: forms.updatedAt,
       })
       .from(forms)
-      .where(and(eq(forms.id, formId), eq(forms.workspaceId, workspace.id)))
+      .where(
+        and(eq(forms.id, validFormId), eq(forms.workspaceId, workspace.id)),
+      )
       .limit(1)
       .for("update");
     if (!form || form.status === "archived") {
@@ -307,7 +320,10 @@ export const restoreDraftFromVersion = async (
       })
       .from(formVersions)
       .where(
-        and(eq(formVersions.id, versionId), eq(formVersions.formId, formId)),
+        and(
+          eq(formVersions.id, validVersionId),
+          eq(formVersions.formId, validFormId),
+        ),
       )
       .limit(1);
     if (!version) throw notFoundError("Form version not found");
@@ -331,7 +347,7 @@ export const restoreDraftFromVersion = async (
       action: "form.version_restored",
       actorId: workspace.user.id,
       metadata: { versionId: version.id, versionNumber: version.versionNumber },
-      resourceId: formId,
+      resourceId: validFormId,
       resourceType: "form",
       workspaceId: workspace.id,
     });
@@ -345,6 +361,7 @@ export const restoreDraftFromVersion = async (
 };
 
 export const archiveForm = async (workspaceSlug: string, formId: string) => {
+  const validFormId = requireUuidParam(formId, "form ID");
   const workspace = await requireWorkspace(workspaceSlug, "editor");
   return db.transaction(async (tx) => {
     const [archived] = await tx
@@ -354,14 +371,16 @@ export const archiveForm = async (workspaceSlug: string, formId: string) => {
         status: "archived",
         updatedAt: new Date(),
       })
-      .where(and(eq(forms.id, formId), eq(forms.workspaceId, workspace.id)))
+      .where(
+        and(eq(forms.id, validFormId), eq(forms.workspaceId, workspace.id)),
+      )
       .returning({ id: forms.id });
     if (!archived) throw notFoundError("Form not found");
     await tx.insert(auditLogs).values({
       action: "form.archived",
       actorId: workspace.user.id,
       metadata: {},
-      resourceId: formId,
+      resourceId: validFormId,
       resourceType: "form",
       workspaceId: workspace.id,
     });

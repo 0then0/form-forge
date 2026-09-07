@@ -194,7 +194,8 @@ integration("submission and delivery pipeline", () => {
       userId: user.id,
       workspaceId: workspace.id,
     });
-    if (!seeded.version) throw new Error("Expected a published version");
+    const version = seeded.version;
+    if (!version) throw new Error("Expected a published version");
     const input = {
       values: { name: "Ada" },
       versionId: seeded.version.id,
@@ -274,7 +275,8 @@ integration("submission and delivery pipeline", () => {
       userId: user.id,
       workspaceId: workspace.id,
     });
-    if (!seeded.version) throw new Error("Expected a published version");
+    const version = seeded.version;
+    if (!version) throw new Error("Expected a published version");
     const input = {
       values: { z: "last", a: "first" },
       versionId: seeded.version.id,
@@ -740,6 +742,92 @@ integration("submission and delivery pipeline", () => {
     expect(sender).not.toHaveBeenCalled();
   });
 
+  test("continues reclaiming supported outbox events after the poison budget", async () => {
+    const aggregateId = crypto.randomUUID();
+    const [event] = await db
+      .insert(outboxEvents)
+      .values({
+        aggregateId,
+        attempts: 10,
+        payload: { submissionId: aggregateId },
+        status: "failed",
+        type: "submission.received",
+      })
+      .returning({ id: outboxEvents.id });
+    if (!event) throw new Error("Could not seed retryable outbox event");
+    const sender = vi.fn(async () => undefined);
+
+    await dispatchPendingOutbox(1, sender);
+
+    const [sent] = await db
+      .select({ attempts: outboxEvents.attempts, status: outboxEvents.status })
+      .from(outboxEvents)
+      .where(eq(outboxEvents.id, event.id));
+    expect(sender).toHaveBeenCalledOnce();
+    expect(sent).toMatchObject({ attempts: 11, status: "sent" });
+  });
+
+  test("records a visible submission event when dispatch repeatedly fails", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Expected a published version");
+    const [submission] = await db
+      .insert(submissions)
+      .values({
+        formId: seeded.form.id,
+        formVersionId: seeded.version.id,
+        idempotencyKey: "dispatch-failure",
+        normalizedValues: { name: "Ada" },
+        receivedValues: { name: "Ada" },
+        utm: {},
+      })
+      .returning({ id: submissions.id });
+    if (!submission) throw new Error("Could not seed submission");
+    const [event] = await db
+      .insert(outboxEvents)
+      .values({
+        aggregateId: submission.id,
+        attempts: 9,
+        payload: {},
+        type: "submission.received",
+      })
+      .returning({ id: outboxEvents.id });
+    if (!event) throw new Error("Could not seed outbox event");
+
+    await dispatchPendingOutbox(1, async () => {
+      throw new Error("Inngest is unavailable");
+    });
+    await db
+      .update(outboxEvents)
+      .set({ availableAt: new Date(0) })
+      .where(eq(outboxEvents.id, event.id));
+    await dispatchPendingOutbox(1, async () => {
+      throw new Error("Inngest is unavailable");
+    });
+
+    const dispatchFailures = await db
+      .select({ data: submissionEvents.data, type: submissionEvents.type })
+      .from(submissionEvents)
+      .where(
+        and(
+          eq(submissionEvents.submissionId, submission.id),
+          eq(submissionEvents.type, "delivery.dispatch_failed"),
+        ),
+      );
+    expect(dispatchFailures).toEqual([
+      {
+        data: {
+          attempts: 10,
+          eventType: "submission.received",
+        },
+        type: "delivery.dispatch_failed",
+      },
+    ]);
+  });
+
   test("manages webhook endpoint state and rotates its one-time secret", async () => {
     const { user, workspace } = await seedWorkspace();
     const seeded = await seedForm({
@@ -825,6 +913,60 @@ integration("submission and delivery pipeline", () => {
       await exportSubmissionsCsv(workspace.slug),
     ).text();
     expect(csv).toContain(`"'=HYPERLINK(""https://example.com"")"`);
+  });
+
+  test("exports only the submissions selected by form and delivery filters", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const included = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    const excluded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!included.version || !excluded.version) {
+      throw new Error("Expected published form versions");
+    }
+    await db.insert(submissions).values([
+      {
+        deliveryStatus: "succeeded",
+        formId: included.form.id,
+        formVersionId: included.version.id,
+        idempotencyKey: "csv-included",
+        normalizedValues: { name: "included-row" },
+        receivedValues: { name: "included-row" },
+        utm: {},
+      },
+      {
+        deliveryStatus: "failed",
+        formId: included.form.id,
+        formVersionId: included.version.id,
+        idempotencyKey: "csv-wrong-status",
+        normalizedValues: { name: "wrong-status" },
+        receivedValues: { name: "wrong-status" },
+        utm: {},
+      },
+      {
+        deliveryStatus: "succeeded",
+        formId: excluded.form.id,
+        formVersionId: excluded.version.id,
+        idempotencyKey: "csv-wrong-form",
+        normalizedValues: { name: "wrong-form" },
+        receivedValues: { name: "wrong-form" },
+        utm: {},
+      },
+    ]);
+
+    const csv = await new Response(
+      await exportSubmissionsCsv(workspace.slug, {
+        deliveryStatus: "succeeded",
+        formId: included.form.id,
+      }),
+    ).text();
+    expect(csv).toContain("included-row");
+    expect(csv).not.toContain("wrong-status");
+    expect(csv).not.toContain("wrong-form");
   });
 
   test("recovers an expired lease and completes failed then manual retry flow", async () => {
@@ -976,6 +1118,71 @@ integration("submission and delivery pipeline", () => {
     );
     expect(attemptDestinations.map((attempt) => attempt.requestUrl)).toContain(
       "https://hooks.example.com/recovered",
+    );
+  });
+
+  test("prioritizes the oldest due deliveries when the outbox batch is full", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    const version = seeded.version;
+    if (!version) throw new Error("Expected a published version");
+    const [endpoint] = await db
+      .insert(webhookEndpoints)
+      .values({
+        formId: seeded.form.id,
+        name: "Backlog",
+        secretCiphertext: encryptWebhookSecret("backlog-secret"),
+        url: "https://hooks.example.com/backlog",
+      })
+      .returning({ id: webhookEndpoints.id });
+    if (!endpoint) throw new Error("Could not seed endpoint");
+    const created = await db
+      .insert(submissions)
+      .values(
+        Array.from({ length: 501 }, (_, index) => ({
+          formId: seeded.form.id,
+          formVersionId: version.id,
+          idempotencyKey: `backlog-${index}`,
+          normalizedValues: { name: "Ada" },
+          receivedValues: { name: "Ada" },
+          utm: {},
+        })),
+      )
+      .returning({ id: submissions.id });
+    const oldestSubmission = created[500];
+    if (!oldestSubmission) throw new Error("Could not seed backlog submission");
+    const dueAt = new Date(Date.now() - 60_000);
+    const deliveries = await db
+      .insert(webhookDeliveries)
+      .values(
+        created.map((submission, index) => ({
+          endpointId: endpoint.id,
+          nextAttemptAt:
+            index === 500 ? new Date(Date.now() - 60 * 60_000) : dueAt,
+          submissionId: submission.id,
+        })),
+      )
+      .returning({
+        id: webhookDeliveries.id,
+        submissionId: webhookDeliveries.submissionId,
+      });
+    const oldestDelivery = deliveries.find(
+      (delivery) => delivery.submissionId === oldestSubmission.id,
+    );
+    if (!oldestDelivery) throw new Error("Could not find oldest delivery");
+
+    await enqueueDueDeliveries();
+
+    const enqueued = await db
+      .select({ aggregateId: outboxEvents.aggregateId })
+      .from(outboxEvents)
+      .where(eq(outboxEvents.type, "delivery.requested"));
+    expect(enqueued).toHaveLength(500);
+    expect(enqueued.map((event) => event.aggregateId)).toContain(
+      oldestDelivery.id,
     );
   });
 

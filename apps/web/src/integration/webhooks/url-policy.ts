@@ -58,7 +58,14 @@ const isPrivateIpv6 = (address: string): boolean => {
   const groups = normalized.split(":");
   const first = Number.parseInt(groups[0] ?? "", 16);
   const second = Number.parseInt(groups[1] || "0", 16);
-  if (!Number.isInteger(first) || !Number.isInteger(second)) return true;
+  const third = Number.parseInt(groups[2] || "0", 16);
+  if (
+    !Number.isInteger(first) ||
+    !Number.isInteger(second) ||
+    !Number.isInteger(third)
+  ) {
+    return true;
+  }
 
   const isGlobalUnicast = first >= 0x2000 && first <= 0x3fff;
   const isIanaSpecialAssignment = first === 0x2001 && second <= 0x01ff;
@@ -66,11 +73,16 @@ const isPrivateIpv6 = (address: string): boolean => {
     (first === 0x2001 && second === 0x0db8) ||
     (first === 0x3fff && second <= 0x0fff);
   const isSixToFour = first === 0x2002;
+  // AS112's direct delegation service is intentionally non-global and must
+  // not become a webhook target despite being inside global-unicast space.
+  const isAs112DirectDelegation =
+    first === 0x2620 && second === 0x004f && third === 0x8000;
   return (
     !isGlobalUnicast ||
     isIanaSpecialAssignment ||
     isDocumentation ||
-    isSixToFour
+    isSixToFour ||
+    isAs112DirectDelegation
   );
 };
 

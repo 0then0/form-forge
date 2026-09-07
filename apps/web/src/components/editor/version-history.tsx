@@ -16,6 +16,7 @@ import { RotateCcw } from "lucide-react";
 import { useState } from "react";
 
 import { readApiData } from "@/lib/client-api";
+import { LocalDateTime } from "@/components/local-date-time";
 
 type Version = {
   id: string;
@@ -87,7 +88,13 @@ export const VersionHistory = ({
         response,
         "Could not load older versions",
       );
-      setItems((current) => [...current, ...olderVersions]);
+      setItems((current) => {
+        const knownIds = new Set(current.map((version) => version.id));
+        return [
+          ...current,
+          ...olderVersions.filter((version) => !knownIds.has(version.id)),
+        ];
+      });
       setCursor(nextCursorHeader === null ? null : Number(nextCursorHeader));
     } catch (caught) {
       setError(
@@ -161,17 +168,10 @@ export const VersionHistory = ({
                       <div className="font-medium">
                         Version {version.versionNumber}
                       </div>
-                      <time
+                      <LocalDateTime
                         className="text-xs text-slate-500"
-                        dateTime={version.publishedAt}
-                      >
-                        {new Intl.DateTimeFormat("en-US", {
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                          timeZone: "UTC",
-                        }).format(new Date(version.publishedAt))}{" "}
-                        UTC
-                      </time>
+                        value={version.publishedAt}
+                      />
                     </div>
                     <Dialog>
                       <DialogTrigger asChild>

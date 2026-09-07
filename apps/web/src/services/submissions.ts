@@ -26,6 +26,7 @@ import {
   type DeliveryStatus,
 } from "@/db/schema";
 import { AppError, notFoundError } from "@/lib/errors";
+import { requireUuidParam } from "@/lib/route-params";
 
 type SubmissionCursor = { createdAt: Date; id: string };
 
@@ -76,7 +77,10 @@ export const listSubmissions = async ({
   const conditions: SQL[] = [eq(forms.workspaceId, workspace.id)];
   if (deliveryStatus)
     conditions.push(eq(submissions.deliveryStatus, deliveryStatus));
-  if (formId) conditions.push(eq(submissions.formId, formId));
+  if (formId)
+    conditions.push(
+      eq(submissions.formId, requireUuidParam(formId, "form ID")),
+    );
   if (cursor) {
     const decoded = decodeCursor(cursor);
     const paginationCondition = or(
@@ -122,6 +126,7 @@ export const getSubmissionDetail = async (
   workspaceSlug: string,
   submissionId: string,
 ) => {
+  const validSubmissionId = requireUuidParam(submissionId, "submission ID");
   const workspace = await requireWorkspace(workspaceSlug);
   const [submission] = await db
     .select({
@@ -145,7 +150,7 @@ export const getSubmissionDetail = async (
     .innerJoin(formVersions, eq(formVersions.id, submissions.formVersionId))
     .where(
       and(
-        eq(submissions.id, submissionId),
+        eq(submissions.id, validSubmissionId),
         eq(forms.workspaceId, workspace.id),
       ),
     )
@@ -156,7 +161,7 @@ export const getSubmissionDetail = async (
     db
       .select()
       .from(submissionEvents)
-      .where(eq(submissionEvents.submissionId, submissionId))
+      .where(eq(submissionEvents.submissionId, validSubmissionId))
       .orderBy(desc(submissionEvents.createdAt))
       .limit(201),
     db
@@ -177,7 +182,7 @@ export const getSubmissionDetail = async (
         webhookEndpoints,
         eq(webhookEndpoints.id, webhookDeliveries.endpointId),
       )
-      .where(eq(webhookDeliveries.submissionId, submissionId))
+      .where(eq(webhookDeliveries.submissionId, validSubmissionId))
       .orderBy(desc(webhookDeliveries.createdAt))
       .limit(101),
   ]);
@@ -227,13 +232,31 @@ const CSV_BATCH_SIZE = 100;
 const MAX_EXPORT_ROWS = 10_000;
 const MAX_EXPORT_COLUMNS = 500;
 
-export const exportSubmissionsCsv = async (workspaceSlug: string) => {
+type SubmissionExportFilters = {
+  deliveryStatus?: DeliveryStatus | undefined;
+  formId?: string | undefined;
+};
+
+export const exportSubmissionsCsv = async (
+  workspaceSlug: string,
+  filters: SubmissionExportFilters = {},
+) => {
   const workspace = await requireWorkspace(workspaceSlug);
+  const conditions: SQL[] = [eq(forms.workspaceId, workspace.id)];
+  if (filters.deliveryStatus) {
+    conditions.push(eq(submissions.deliveryStatus, filters.deliveryStatus));
+  }
+  if (filters.formId) {
+    conditions.push(
+      eq(submissions.formId, requireUuidParam(filters.formId, "form ID")),
+    );
+  }
+  const where = and(...conditions);
   const [rowCount] = await db
     .select({ value: count() })
     .from(submissions)
     .innerJoin(forms, eq(forms.id, submissions.formId))
-    .where(eq(forms.workspaceId, workspace.id));
+    .where(where);
 
   if ((rowCount?.value ?? 0) > MAX_EXPORT_ROWS) {
     throw new AppError(
@@ -247,7 +270,7 @@ export const exportSubmissionsCsv = async (workspaceSlug: string) => {
     select distinct jsonb_object_keys(${submissions.normalizedValues}) as key
     from ${submissions}
     inner join ${forms} on ${forms.id} = ${submissions.formId}
-    where ${forms.workspaceId} = ${workspace.id}
+    where ${where}
     order by key
     limit ${MAX_EXPORT_COLUMNS + 1}
   `);
@@ -271,9 +294,15 @@ export const exportSubmissionsCsv = async (workspaceSlug: string) => {
   let cursor: SubmissionCursor | undefined;
 
   await db.insert(auditLogs).values({
-    action: "submissions.exported",
+    action: "submissions.export_requested",
     actorId: workspace.user.id,
-    metadata: { rowCount: rowCount?.value ?? 0 },
+    metadata: {
+      ...(filters.deliveryStatus
+        ? { deliveryStatus: filters.deliveryStatus }
+        : {}),
+      ...(filters.formId ? { formId: filters.formId } : {}),
+      rowCount: rowCount?.value ?? 0,
+    },
     resourceType: "submission",
     workspaceId: workspace.id,
   });
@@ -286,7 +315,7 @@ export const exportSubmissionsCsv = async (workspaceSlug: string) => {
     },
     async pull(controller) {
       try {
-        const conditions: SQL[] = [eq(forms.workspaceId, workspace.id)];
+        const pageConditions = [...conditions];
         if (cursor) {
           const cursorCondition = or(
             lt(submissions.createdAt, cursor.createdAt),
@@ -295,7 +324,7 @@ export const exportSubmissionsCsv = async (workspaceSlug: string) => {
               lt(submissions.id, cursor.id),
             ),
           );
-          if (cursorCondition) conditions.push(cursorCondition);
+          if (cursorCondition) pageConditions.push(cursorCondition);
         }
         const rows = await db
           .select({
@@ -312,7 +341,7 @@ export const exportSubmissionsCsv = async (workspaceSlug: string) => {
             formVersions,
             eq(formVersions.id, submissions.formVersionId),
           )
-          .where(and(...conditions))
+          .where(and(...pageConditions))
           .orderBy(desc(submissions.createdAt), desc(submissions.id))
           .limit(CSV_BATCH_SIZE);
 

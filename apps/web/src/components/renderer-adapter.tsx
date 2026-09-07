@@ -7,29 +7,51 @@ import type {
 import { Alert, Button, Input, Select, Textarea } from "@form-forge/ui";
 import type * as React from "react";
 
-const FieldShell = ({ children, error, field }: FieldShellProps) => (
-  <div className={field.width === "half" ? "sm:col-span-1" : "sm:col-span-2"}>
+const FieldShell = ({ children, error, field }: FieldShellProps) => {
+  const label = (
     <label className="text-sm font-medium text-slate-900" htmlFor={field.id}>
       {field.label}
-      {field.required ? <span className="text-red-600"> *</span> : null}
+      {field.required ? (
+        <span aria-hidden="true" className="text-red-600">
+          {" *"}
+        </span>
+      ) : null}
     </label>
-    {field.description === undefined ? null : (
-      <p id={`${field.id}-description`} className="mt-1 text-sm text-slate-500">
-        {field.description}
-      </p>
-    )}
-    <div className="mt-2">{children}</div>
-    {error === undefined ? null : (
-      <p
-        id={`${field.id}-error`}
-        role="alert"
-        className="mt-1 text-sm text-red-700"
-      >
-        {error}
-      </p>
-    )}
-  </div>
-);
+  );
+
+  return (
+    <div className={field.width === "half" ? "sm:col-span-1" : "sm:col-span-2"}>
+      {field.type === "checkbox" ? (
+        <div className="flex items-center gap-2">
+          {children}
+          {label}
+        </div>
+      ) : (
+        <>
+          {label}
+          <div className="mt-2">{children}</div>
+        </>
+      )}
+      {field.description === undefined ? null : (
+        <p
+          id={`${field.id}-description`}
+          className="mt-1 text-sm text-slate-500"
+        >
+          {field.description}
+        </p>
+      )}
+      {error === undefined ? null : (
+        <p
+          id={`${field.id}-error`}
+          role="alert"
+          className="mt-1 text-sm text-red-700"
+        >
+          {error}
+        </p>
+      )}
+    </div>
+  );
+};
 
 const RendererInput = (props: React.InputHTMLAttributes<HTMLInputElement>) => (
   <Input {...props} />

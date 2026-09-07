@@ -27,6 +27,7 @@ const schema: FormSchemaV1 = {
 
 describe("HostedForm", () => {
   afterEach(() => {
+    window.sessionStorage.clear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -52,7 +53,7 @@ describe("HostedForm", () => {
       <HostedForm schema={schema} slug="contact" versionId="version-id" />,
     );
 
-    await user.type(screen.getByLabelText("Name *"), "Ada");
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Ada");
     await user.click(screen.getByRole("button", { name: "Submit" }));
 
     await screen.findByRole("status");
@@ -86,11 +87,112 @@ describe("HostedForm", () => {
       <HostedForm schema={schema} slug="contact" versionId="version-id" />,
     );
 
-    await user.type(screen.getByLabelText("Name *"), "Ada");
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Ada");
     await user.click(screen.getByRole("button", { name: "Submit" }));
 
     expect(
       await screen.findByText("Your response could not be submitted"),
     ).toBeVisible();
+  });
+
+  it("links the hosted-form attribution to the project repository", () => {
+    vi.stubGlobal("matchMedia", () => ({
+      addEventListener: vi.fn(),
+      matches: false,
+      removeEventListener: vi.fn(),
+    }));
+    render(
+      <HostedForm schema={schema} slug="contact" versionId="version-id" />,
+    );
+
+    expect(screen.getByRole("link", { name: "Form Forge" })).toHaveAttribute(
+      "href",
+      "https://github.com/0then0/form-forge",
+    );
+  });
+
+  it("reuses the idempotency key after an unsuccessful submission", async () => {
+    vi.stubGlobal("matchMedia", () => ({
+      addEventListener: vi.fn(),
+      matches: false,
+      removeEventListener: vi.fn(),
+    }));
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("Gateway error", { status: 502 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { submissionId: "submission" } }), {
+          headers: { "Content-Type": "application/json" },
+          status: 201,
+        }),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup();
+    const first = render(
+      <HostedForm schema={schema} slug="contact" versionId="version-id" />,
+    );
+
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Ada");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await screen.findByText("Your response could not be submitted");
+    first.unmount();
+
+    render(
+      <HostedForm schema={schema} slug="contact" versionId="version-id" />,
+    );
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Ada");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await screen.findByRole("status");
+
+    const firstRequest = fetch.mock.calls[0]?.[1] as RequestInit;
+    const secondRequest = fetch.mock.calls[1]?.[1] as RequestInit;
+    const firstHeaders = firstRequest.headers as Record<string, string>;
+    const secondHeaders = secondRequest.headers as Record<string, string>;
+    expect(firstHeaders).toMatchObject({
+      "Idempotency-Key": expect.any(String),
+    });
+    expect(secondHeaders).toMatchObject({
+      "Idempotency-Key": firstHeaders["Idempotency-Key"],
+    });
+  });
+
+  it("creates a new idempotency key after a successful submission", async () => {
+    vi.stubGlobal("matchMedia", () => ({
+      addEventListener: vi.fn(),
+      matches: false,
+      removeEventListener: vi.fn(),
+    }));
+    const fetch = vi.fn<typeof globalThis.fetch>(
+      async () =>
+        new Response(JSON.stringify({ data: { submissionId: "submission" } }), {
+          headers: { "Content-Type": "application/json" },
+          status: 201,
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup();
+    const first = render(
+      <HostedForm schema={schema} slug="contact" versionId="version-id" />,
+    );
+
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Ada");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await screen.findByRole("status");
+    first.unmount();
+
+    render(
+      <HostedForm schema={schema} slug="contact" versionId="version-id" />,
+    );
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Ada");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await screen.findByRole("status");
+
+    const firstRequest = fetch.mock.calls[0]?.[1] as RequestInit;
+    const secondRequest = fetch.mock.calls[1]?.[1] as RequestInit;
+    const firstHeaders = firstRequest.headers as Record<string, string>;
+    const secondHeaders = secondRequest.headers as Record<string, string>;
+    expect(secondHeaders["Idempotency-Key"]).not.toBe(
+      firstHeaders["Idempotency-Key"],
+    );
   });
 });

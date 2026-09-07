@@ -4,7 +4,7 @@ import Link from "next/link";
 
 import { canEdit, requireWorkspace } from "@/auth/permissions";
 import { RetryButton } from "@/components/deliveries/retry-button";
-import { formatUtcDateTime } from "@/lib/date-time";
+import { LocalDateTime } from "@/components/local-date-time";
 import { getSubmissionDetail } from "@/services/submissions";
 
 const statusTone = {
@@ -28,6 +28,9 @@ export default async function SubmissionDetailPage({
   const fieldLabels = new Map(
     schema.fields.map((field) => [field.key, field.label]),
   );
+  const dispatchFailure = detail.events.find(
+    (event) => event.type === "delivery.dispatch_failed",
+  );
 
   return (
     <div>
@@ -44,9 +47,7 @@ export default async function SubmissionDetailPage({
           </h1>
           <p className="mt-1 text-sm text-slate-600">
             Version {detail.submission.versionNumber} ·{" "}
-            <time dateTime={detail.submission.createdAt.toISOString()}>
-              {formatUtcDateTime(detail.submission.createdAt)}
-            </time>
+            <LocalDateTime value={detail.submission.createdAt} />
           </p>
         </div>
         <Badge tone={statusTone[detail.submission.deliveryStatus]}>
@@ -58,6 +59,12 @@ export default async function SubmissionDetailPage({
         <Alert className="mt-4" tone="info">
           This submission has more than 200 history records. The newest records
           are shown.
+        </Alert>
+      ) : null}
+      {dispatchFailure ? (
+        <Alert className="mt-4">
+          The delivery dispatcher could not enqueue this submission after
+          repeated attempts. It will continue retrying automatically.
         </Alert>
       ) : null}
 
@@ -217,12 +224,10 @@ export default async function SubmissionDetailPage({
                 {detail.events.map((event) => (
                   <li key={event.id}>
                     <p className="text-sm font-medium">{event.type}</p>
-                    <time
+                    <LocalDateTime
                       className="text-xs text-slate-500"
-                      dateTime={event.createdAt.toISOString()}
-                    >
-                      {formatUtcDateTime(event.createdAt)}
-                    </time>
+                      value={event.createdAt}
+                    />
                   </li>
                 ))}
               </ol>

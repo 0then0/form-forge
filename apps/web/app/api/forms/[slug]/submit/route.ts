@@ -4,6 +4,8 @@ import { z } from "zod";
 
 import { apiError, MAX_SUBMISSION_BODY_BYTES, parseJsonBody } from "@/lib/api";
 import { AppError } from "@/lib/errors";
+import { trustedForwardedFor } from "@/lib/request-fingerprint";
+import { env } from "@/env";
 import { receiveSubmission } from "@/services/public-forms";
 
 const idempotencyKeySchema = z.string().min(1).max(200);
@@ -26,10 +28,10 @@ export const POST = async (
     const input = submissionRequestSchema.parse(
       await parseJsonBody(request, MAX_SUBMISSION_BODY_BYTES),
     );
-    const forwardedFor = request.headers
-      .get("x-forwarded-for")
-      ?.split(",")[0]
-      ?.trim();
+    const forwardedFor = trustedForwardedFor(
+      request.headers,
+      env.TRUST_PROXY === "1",
+    );
     const userAgent = request.headers.get("user-agent") ?? undefined;
     const result = await receiveSubmission({
       ...(forwardedFor === undefined

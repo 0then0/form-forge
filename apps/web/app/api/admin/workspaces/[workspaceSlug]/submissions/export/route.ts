@@ -1,13 +1,24 @@
 import { apiError } from "@/lib/api";
 import { exportSubmissionsCsv } from "@/services/submissions";
+import { z } from "zod";
+
+const querySchema = z.object({
+  deliveryStatus: z
+    .enum(["pending", "processing", "succeeded", "failed"])
+    .optional(),
+  formId: z.uuid().optional(),
+});
 
 export const GET = async (
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ workspaceSlug: string }> },
 ) => {
   try {
     const { workspaceSlug } = await context.params;
-    const csvStream = await exportSubmissionsCsv(workspaceSlug);
+    const query = querySchema.parse(
+      Object.fromEntries(new URL(request.url).searchParams),
+    );
+    const csvStream = await exportSubmissionsCsv(workspaceSlug, query);
     return new Response(csvStream, {
       headers: {
         "Content-Disposition": `attachment; filename="form-forge-submissions-${new Date().toISOString().slice(0, 10)}.csv"`,

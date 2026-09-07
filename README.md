@@ -58,6 +58,7 @@ For local development:
 - Keep `INNGEST_DEV=1`. The Inngest v4 SDK requires this to use the local Dev Server.
 - `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` may use the non-secret value `local`; the local Dev Server does not validate cloud keys.
 - `SENTRY_DSN` and `NEXT_PUBLIC_SENTRY_DSN` may remain empty. Sentry is disabled when they are empty.
+- Keep `TRUST_PROXY=0` unless a reverse proxy overwrites `X-Forwarded-For`.
 - Do not reuse the example secrets outside local development.
 
 ### 4. Configure GitHub OAuth
@@ -156,20 +157,26 @@ unit tests; no test sends a webhook to an external service.
 ### PostgreSQL integration tests
 
 The delivery and submission integration suite is skipped unless it receives a
-dedicated disposable database. Never point this variable at the development or
-production database because the suite drops and recreates its `public` schema:
+dedicated disposable database. Turbo passes `TEST_DATABASE_URL` through to the
+workspace test task, so the full suite can run with `pnpm test`. Never point
+this variable at the development or production database because the suite drops
+and recreates its `public` schema:
 
 ```sh
 createdb form_forge_test
 export TEST_DATABASE_URL='postgresql://postgres:postgres@localhost:5432/form_forge_test'
+pnpm test
+
+# Run only the PostgreSQL integration suite:
 pnpm --filter @form-forge/web exec vitest run \
   src/integration/pipeline.integration.test.ts
 ```
 
 The suite applies all Drizzle migrations before testing idempotency,
 submission/outbox atomicity, per-form rate limiting, acceptance of older form
-versions, RBAC, concurrent publication and owner changes, outbox claims and
-retry exhaustion, expired delivery leases, webhook failures, signatures,
+versions, RBAC, concurrent publication and owner changes, outbox claims,
+poison-event retry limits and sustained dispatch failures, expired delivery
+leases, webhook failures, signatures,
 automatic and manual retries, recovery from a corrupted endpoint secret,
 version restore, endpoint lifecycle, and safe streaming CSV export.
 
@@ -190,11 +197,14 @@ X-Form-Forge-Timestamp
 X-Form-Forge-Signature: v1=<hex hmac-sha256>
 ```
 
-The signature input is `<timestamp>.<raw-body>`. Endpoint secrets are shown once and stored with AES-256-GCM encryption.
+The signature input is `<timestamp>.<raw-body>`. Endpoint secrets are shown once and stored with AES-256-GCM encryption. Delivery is at-least-once, so webhook consumers must deduplicate requests by `X-Form-Forge-Id`.
 
-Submission throttling prefers the address from `X-Forwarded-For` over the
-client-generated visitor ID. In a deployment, the reverse proxy must overwrite
-this header rather than forwarding a value supplied by the caller.
+Submission throttling uses the client-generated visitor ID by default. Set
+`TRUST_PROXY=1` only when the reverse proxy overwrites `X-Forwarded-For`; in
+that mode the first forwarded address becomes the submission fingerprint.
+
+CSV exports from the submissions inbox preserve the active form and delivery
+status filters.
 
 ### Public submission limits
 

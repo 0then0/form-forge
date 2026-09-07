@@ -1,13 +1,15 @@
 import { redirect } from "next/navigation";
 
-import { requireUser } from "@/auth/session";
+import { getSession } from "@/auth/session";
 import {
   ensurePersonalWorkspace,
   listUserWorkspaces,
 } from "@/services/workspaces";
 
 export default async function AppIndexPage() {
-  const user = await requireUser();
+  const session = await getSession();
+  if (!session?.user?.id) redirect("/login");
+  const user = session.user;
   let workspaces = await listUserWorkspaces(user.id);
   if (workspaces.length === 0) {
     await ensurePersonalWorkspace(user);
