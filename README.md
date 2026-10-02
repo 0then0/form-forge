@@ -244,7 +244,7 @@ Database commands require `DATABASE_URL` in the shell. Lefthook formats and lint
 
 [GitHub Actions](.github/workflows/ci.yml) runs on pull requests and pushes to `main`. It installs locked dependencies, applies migrations to an empty PostgreSQL database, checks formatting, types, lint, and unused code, and runs unit tests, PostgreSQL integration tests, a production build, and the browser lifecycle test.
 
-The workflow uses PostgreSQL 16 with separate application, integration, and e2e databases. Application keys are generated for each run; OAuth and Inngest values are test placeholders. No repository secrets or external accounts are required. Failed browser runs retain reports and traces for seven days.
+The workflow uses PostgreSQL 16 with separate application, integration, and e2e databases. Application keys are generated for each run; OAuth and Inngest values are test placeholders. No repository secrets or external accounts are required. Browser reports and available screenshots and traces are retained for seven days, including failed attempts that pass on retry. Cancelled runs skip diagnostic uploads.
 
 ### PostgreSQL integration tests
 
