@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Form Forge: schema-first forms with validated delivery</title>
+  <rect width="64" height="64" rx="14" fill="#2563eb"/>
+  <g fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M19 15h-5v34h5M45 15h5v34h-5"/>
+    <path d="M25 23h14M25 31h8"/>
+    <path d="m25 41 6 6 11-11"/>
+  </g>
+</svg>

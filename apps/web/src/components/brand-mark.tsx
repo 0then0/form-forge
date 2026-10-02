@@ -5,15 +5,15 @@ export const BrandMark = ({ className }: { className?: string }) => (
   <span
     aria-hidden="true"
     className={cn(
-      "inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-[#fff] p-0.5 shadow-sm dark:border-slate-700",
+      "inline-flex size-8 shrink-0 items-center justify-center",
       className,
     )}
   >
     <Image
-      src="/form-forge-mark.png"
+      src="/form-forge-mark.svg"
       alt=""
-      width={512}
-      height={512}
+      width={64}
+      height={64}
       className="size-full object-contain"
     />
   </span>

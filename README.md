@@ -1,51 +1,54 @@
+<img src="apps/web/public/form-forge-mark.svg" alt="Form Forge" width="64" height="64">
+
 # Form Forge
 
-Form Forge is a schema-first, headless form platform. The MVP provides immutable form versions, hosted and iframe forms, version-aware submissions, workspace roles, signed webhook delivery, visible attempt history, and manual retry.
+[![Node.js requirement](https://img.shields.io/badge/Node.js-%3E%3D22.12.0-339933?logo=nodedotjs&logoColor=white)](package.json)
+[![pnpm version](https://img.shields.io/badge/pnpm-10.33.2-F69220?logo=pnpm&logoColor=white)](package.json)
+[![Project status: MVP](https://img.shields.io/badge/status-MVP-2563eb)](#scope-and-limitations)
+[![License](https://img.shields.io/github/license/0then0/form-forge)](LICENSE)
 
-## Architecture
+Form Forge is a schema-first, headless form platform. Define a form, publish an immutable version, collect responses, and deliver them to signed webhooks with inspectable attempts and retries.
 
-- `apps/web` owns Next.js, Auth.js, PostgreSQL, Drizzle migrations, admin/public routes, Inngest handlers, and Sentry.
-- `packages/form-schema` owns the versioned product schema, DTOs, visibility rules, normalization, and validation. It has no framework or platform runtime dependencies.
-- `packages/form-renderer` maps the domain schema to React Hook Form through an adapter interface.
-- `packages/ui` owns shadcn-style primitives and no form domain logic.
+This is an MVP learning project, not a drag-and-drop builder or a managed production service. Its focus is explicit contracts, versioned data, reliable background delivery, and a usable administration interface.
 
-Draft schemas are validated JSONB snapshots. Publishing creates an immutable `form_versions` row. Every submission references the exact version presented to the respondent.
+## Features
 
-Submission persistence and an outbox event share one PostgreSQL transaction. Inngest drains the outbox, creates one logical delivery per enabled endpoint, and records every HTTP attempt. Product-visible failures are stored in PostgreSQL rather than relying on logs.
+- Schema editor with a live preview, validation, and conditional field visibility.
+- Short text, long text, email, number, select, checkbox, and date fields.
+- Editable drafts, immutable published versions, version comparison, and restoration into a new draft revision.
+- Hosted forms and iframe embedding.
+- Version-aware, idempotent submissions with UTM and visitor fingerprint metadata.
+- Filterable submissions and deliveries, failure diagnostics, and CSV export.
+- Signed webhooks, automatic retries, manual recovery, and endpoint management: edit, disable, enable, archive, and rotate secrets.
+- Workspace roles: owner, editor, and viewer.
+- System, light, and dark themes.
 
-The minute-based recovery job also requeues submissions that were ingested but
-did not finish processing within five minutes. Recovery and manual delivery
-retries use fresh event IDs; webhook consumers must still tolerate at-least-once
-delivery.
+## Getting started
 
-## Local development
-
-### Prerequisites
+### Requirements
 
 - Node.js 22.12 or newer.
-- pnpm 10. The repository currently pins pnpm 10.33.2.
-- A running PostgreSQL instance and permission to create a database.
-- A GitHub account for the local OAuth application.
+- pnpm 10.33.2, as pinned in `package.json`.
+- PostgreSQL. The Docker example below uses PostgreSQL 16.
+- A GitHub OAuth application for signing in.
+
+Run the following commands from the repository root unless stated otherwise.
 
 ### 1. Install dependencies
-
-From the repository root:
 
 ```sh
 pnpm install
 ```
 
-### 2. Create the database
+### 2. Start PostgreSQL
 
-Create an empty PostgreSQL database named `form_forge`, or use another name and update `DATABASE_URL` accordingly. For a standard local PostgreSQL installation this may be as simple as:
+For a local PostgreSQL installation:
 
 ```sh
 createdb form_forge
 ```
 
-The username, password, host, and port in `DATABASE_URL` must match your local PostgreSQL installation. The credentials in `.env.example` are only an example.
-
-Alternatively, use a local Docker container (port 5432 must be free):
+Alternatively, start a local Docker container. Port 5432 must be available:
 
 ```sh
 docker run -d --name form-forge-postgres \
@@ -53,13 +56,11 @@ docker run -d --name form-forge-postgres \
   -e POSTGRES_DB=form_forge -p 127.0.0.1:5432:5432 \
   -v form-forge-postgres-data:/var/lib/postgresql/data postgres:16
 docker exec form-forge-postgres pg_isready -U postgres
-docker exec form-forge-postgres createdb -U postgres form_forge_test
-docker exec form-forge-postgres createdb -U postgres form_forge_e2e
 ```
 
-Use `postgresql://postgres:postgres@127.0.0.1:5432/form_forge` locally.
-The named volume preserves database contents when the container stops.
-For subsequent runs, use `docker start form-forge-postgres`.
+Wait until PostgreSQL reports that it is accepting connections. For this container, use `postgresql://postgres:postgres@127.0.0.1:5432/form_forge`.
+
+The named volume preserves data when the container stops. On subsequent runs, use `docker start form-forge-postgres`. These credentials are for local development only.
 
 ### 3. Configure the environment
 
@@ -67,202 +68,228 @@ For subsequent runs, use `docker start form-forge-postgres`.
 cp apps/web/.env.example apps/web/.env
 ```
 
-Generate independent values for `AUTH_SECRET`, `FINGERPRINT_SECRET`, and `WEBHOOK_ENCRYPTION_KEY`. Run this command three times and paste a different result into each variable:
+Set `DATABASE_URL` to match your PostgreSQL installation. Generate a separate value for each of `AUTH_SECRET`, `FINGERPRINT_SECRET`, and `WEBHOOK_ENCRYPTION_KEY` by running this command three times:
 
 ```sh
 openssl rand -base64 32
 ```
 
-Both `.env` and `.env.local` are ignored by Git. Next.js reads both, with
-`.env.local` taking precedence. Keep local values in one file to avoid stale
-overrides. Turbo forwards declared environment variables and includes the web
-environment files in its build cache inputs.
+`WEBHOOK_ENCRYPTION_KEY` must be a base64-encoded key of exactly 32 bytes. Keep this key stable: changing it prevents decryption of existing webhook secrets.
 
 For local development:
 
-- Keep `NEXTAUTH_URL`, `APP_URL`, and `NEXT_PUBLIC_APP_URL` set to `http://localhost:3000`.
-- Keep `INNGEST_DEV=1`. The Inngest v4 SDK requires this to use the local Dev Server.
-- `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` may use the non-secret value `local`; the local Dev Server does not validate cloud keys.
-- `SENTRY_DSN` and `NEXT_PUBLIC_SENTRY_DSN` may remain empty. Sentry is disabled when they are empty.
-- Keep `TRUST_PROXY=0` unless a reverse proxy overwrites `X-Forwarded-For`.
-- Do not reuse the example secrets outside local development.
+- Set `NEXTAUTH_URL`, `APP_URL`, and `NEXT_PUBLIC_APP_URL` to `http://localhost:3000`.
+- Keep `INNGEST_DEV=1` and use `local` for `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY`.
+- Leave the Sentry DSNs empty to disable error reporting.
+- Keep `TRUST_PROXY=0` unless your reverse proxy overwrites `X-Forwarded-For`.
+- Use `TEST_DATABASE_URL` only for a separate disposable database, never the application database.
 
-### 4. Configure GitHub OAuth
+The application validates environment variables at startup. `.env` and `.env.local` are ignored by Git; Next.js reads both, with `.env.local` taking precedence. Keep local configuration in one file to avoid conflicting values. Never commit secrets.
 
-Create a GitHub OAuth application with:
+### 4. Configure GitHub sign-in
 
-- Homepage URL: `http://localhost:3000`
-- Authorization callback URL: `http://localhost:3000/api/auth/callback/github`
+Create a GitHub OAuth application with these local URLs:
 
-Copy its client ID and client secret to `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` in `apps/web/.env`.
+- Homepage: `http://localhost:3000`
+- Authorization callback: `http://localhost:3000/api/auth/callback/github`
 
-### 5. Apply database migrations
+Set `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` in `apps/web/.env` to the application's client ID and client secret. GitHub is the only supported sign-in provider.
 
-Drizzle Kit runs outside Next.js and does not automatically read the web environment files. Export the same database URL in the terminal before running database commands:
+### 5. Apply migrations
+
+Drizzle Kit does not load the Next.js environment files. Export the same database URL before running database commands:
 
 ```sh
-export DATABASE_URL='postgresql://postgres:postgres@localhost:5432/form_forge'
+export DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:5432/form_forge'
 pnpm db:migrate
 ```
 
-Replace the example URL with the value from your `.env`.
+Replace the URL if your database uses different credentials or a different address.
 
-### 6. Start the application
+### 6. Start the application and background jobs
 
-Run Next.js from the repository root:
+Start Next.js:
 
 ```sh
 pnpm dev
 ```
 
-The application is available at `http://localhost:3000`. In a second terminal, start the [Inngest Dev Server](https://www.inngest.com/docs/local-development):
+Open `http://localhost:3000`. In a second terminal, start the [Inngest Dev Server](https://www.inngest.com/docs/local-development):
 
 ```sh
 npx --ignore-scripts=false inngest-cli@latest dev \
   -u http://localhost:3000/api/inngest
 ```
 
-This standalone `npx` command does not add a dependency to the workspace. The Inngest interface is available at `http://localhost:8288`; the registered application endpoint is `http://localhost:3000/api/inngest`.
+This runs the standalone CLI without adding a workspace dependency. Its dashboard is available at `http://localhost:8288`.
 
-### 7. Verify the first run
+Both processes are needed to exercise webhook delivery. Submissions are persisted immediately; background processing is asynchronous and the outbox is dispatched by a job that runs once a minute. Without Inngest, responses remain stored, but background delivery does not run.
 
-1. Open `http://localhost:3000/login` and sign in with GitHub.
-2. The first sign-in creates a user and a personal workspace.
-3. Create a form, add at least one field, and publish it.
-4. Open the hosted form at `/f/<form-slug>` and submit it.
-5. Open `http://localhost:8288` to inspect the submission and delivery functions.
+### 7. Create your first form
 
-Webhook targets must use a public HTTPS URL. Localhost and private-network targets are intentionally rejected by the webhook URL policy.
+1. Open `/login` and sign in with GitHub. Your first sign-in creates a personal workspace.
+2. Create a form, add fields, and check the preview.
+3. Publish the form and open its hosted page at `/f/<form-slug>`.
+4. Submit a response and inspect it in **Submissions**.
+5. To try delivery, configure a webhook before submitting another response. Inspect its attempts in **Deliveries** and background runs in the Inngest dashboard.
+
+Webhook endpoints must use public HTTPS addresses. Localhost and private-network targets are rejected. Forms without configured endpoints can still collect submissions.
+
+## Public API and embedding
+
+Public routes do not require an admin session:
+
+- `GET /api/forms/:slug` returns `{ data: { form, schema, versionId, versionNumber } }` for the current published form.
+- `POST /api/forms/:slug/submit` accepts `{ versionId, values, context? }` and requires an `Idempotency-Key` header.
+- `/f/:slug` serves the hosted form; `?embed=1` selects the iframe layout. The editor provides a ready-to-copy embed snippet.
+
+### Submit a response
+
+Fetch the published schema first. Use its `versionId` and field keys in the submission. Replace the placeholders below; the form must contain a field with the key `name`:
+
+```sh
+curl 'http://localhost:3000/api/forms/<form-slug>'
+
+curl -X POST 'http://localhost:3000/api/forms/<form-slug>/submit' \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: example-response-001' \
+  -d '{"versionId":"<version-id>","values":{"name":"Ada"}}'
+```
+
+A new submission returns `201` with `{ data: { duplicate: false, status: "accepted", submissionId } }`. Acceptance means the response was stored, not that webhook delivery has completed.
+
+Reuse the same idempotency key when retrying the same response after a network failure. An identical retry returns `200` with `duplicate: true`; reusing the key for different values or a different version returns `409`. Use a new key for each new response.
+
+A previously published version remains valid for submissions from an already-open hosted page, provided the form is still available. A version belonging to another form is rejected. Published schemas are not modified when the draft changes.
+
+Optional `context` supports `visitorId`, `referrer`, and `utm` with the standard `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, and `utm_content` keys. Hosted forms collect metadata automatically when available.
+
+API errors use `{ error: { code, message, requestId, fieldErrors? } }`. Validation errors return `422`; oversized bodies return `413`; throttled submissions return `429` with `Retry-After: 600`.
+
+### Limits
+
+- Submission body: 8,000,000 bytes.
+- Idempotency key: 1–200 characters.
+- Fields per form or submission: 100.
+- Short and long text: 10,000 characters per value; email: 320 characters.
+- Combined submitted text: 64,000 characters.
+- UTM values: normalized to at most 200 characters each.
+- When a fingerprint is available: 20 submissions per form and fingerprint in a rolling 10-minute window.
+- CSV export: 10,000 submissions and 500 distinct submitted field keys.
+
+Throttling uses the client-provided visitor ID by default; callers can change or omit it, so it is not abuse-proof. With `TRUST_PROXY=1`, the first address in `X-Forwarded-For` takes precedence. Enable this only behind a proxy that overwrites the header.
+
+CSV export preserves the active form and delivery-status filters. It freezes selected records and display metadata before streaming, so new responses and later status changes do not alter an export in progress. Spreadsheet-formula prefixes are escaped.
+
+## Webhooks
+
+Webhook requests are JSON `POST` requests with an envelope containing `apiVersion`, `id`, `type`, `createdAt`, and `data`. The current event type is `submission.created`; `data` contains the form identity, normalized submission values and UTM metadata, and the form version identity.
+
+Requests include:
+
+```txt
+X-Form-Forge-Id: <delivery-id>
+X-Form-Forge-Timestamp: <unix-timestamp-seconds>
+X-Form-Forge-Signature: v1=<hex-hmac-sha256>
+```
+
+Verify the signature with the endpoint secret using HMAC-SHA256 over `<timestamp>.<raw-body>`. Use the original request bytes, not reserialized JSON. Endpoint secrets are shown on creation or rotation and stored encrypted with AES-256-GCM.
+
+Return a `2xx` response to acknowledge delivery. Requests have a 10-second timeout. Retryable failures are retried automatically within an initial budget of five attempts; an authorized manual retry increases the total attempt budget by five. Configuration failures can require correction before retrying. Attempts and errors remain visible in the application.
+
+Delivery is **at-least-once**. Consumers must deduplicate by `X-Form-Forge-Id`, including manual retries of the same delivery. Recovery jobs reclaim expired worker leases and requeue submissions whose delivery creation did not complete. Retry timing is driven by persisted scheduling and the minute-based background job, not immediate execution.
+
+## Workspace access
+
+- **Owner:** all actions, including webhook endpoint and membership management.
+- **Editor:** edit and publish forms, restore drafts, view and export submissions, and retry failed deliveries.
+- **Viewer:** read-only access to forms, versions, submissions, and deliveries, including CSV export.
+
+Admin operations enforce workspace membership and role permissions on the server. To add a member by email, that person must first sign in to Form Forge; email invitations are not implemented.
+
+## Architecture
+
+The pnpm workspace keeps domain logic, rendering, UI, and infrastructure separate:
+
+- `apps/web`: Next.js App Router, admin and public routes, Auth.js, PostgreSQL, Drizzle migrations, Inngest, and Sentry.
+- `packages/form-schema`: domain schemas, DTOs, visibility rules, normalization, and validation. TypeScript and Zod only, without framework or platform runtime dependencies.
+- `packages/form-renderer`: headless React Hook Form renderer with replaceable UI adapters.
+- `packages/ui`: shared UI primitives without form domain logic.
+
+The frontend uses React 19, Tailwind CSS, Radix UI, TanStack Query for server state, and TanStack Table for tabular views. Editor state stays in React Hook Form and local React state.
+
+Drafts are validated JSONB snapshots. Publishing creates an immutable `form_versions` record, and every submission references its exact version. Submission persistence and outbox creation share one PostgreSQL transaction. Inngest processes the outbox; delivery outcomes and attempt history are database records, not just logs.
 
 ## Development commands
 
 ```sh
-pnpm dev
-pnpm build
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm test:e2e
-pnpm format
-pnpm format:check
-pnpm knip
-pnpm db:generate
-pnpm db:migrate
-pnpm db:studio
+pnpm dev           # Start the development application
+pnpm build         # Build the application and check workspace packages
+pnpm typecheck     # Check TypeScript across the workspace
+pnpm lint          # Run ESLint
+pnpm format:check  # Check formatting
+pnpm format        # Apply formatting
+pnpm knip          # Check unused code and dependencies
+pnpm test          # Run unit tests and configured integration tests
+pnpm test:e2e      # Run the browser lifecycle test
+pnpm db:generate   # Generate migrations after database schema changes
+pnpm db:migrate    # Apply committed migrations
+pnpm db:studio     # Open Drizzle Studio
 ```
 
-Tests are never part of the pre-commit hook. Lefthook only formats and lints staged source files.
+Database commands require `DATABASE_URL` in the shell. Lefthook formats and lints staged source files before commits; it does not run tests.
+
+### PostgreSQL integration tests
+
+Without `TEST_DATABASE_URL`, `pnpm test` runs unit tests and skips the PostgreSQL suite. To include integration tests, create a dedicated disposable database:
+
+```sh
+createdb form_forge_test
+export TEST_DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:5432/form_forge_test'
+pnpm test
+```
+
+With the Docker container above, replace `createdb` with:
+
+```sh
+docker exec form-forge-postgres createdb -U postgres form_forge_test
+```
+
+To run only the PostgreSQL suite:
+
+```sh
+pnpm --filter @form-forge/web exec vitest run \
+  src/integration/pipeline.integration.test.ts
+```
+
+The suite applies migrations and checks submission atomicity and idempotency, role permissions, concurrent changes, outbox and lease recovery, webhook failures and retries, endpoint management, and CSV export. External webhook transport is substituted in pipeline tests.
+
+**The integration suite drops and recreates the test database's `public` schema. Never use a development, shared, or production database.** Do not run it concurrently with e2e tests against the same database.
 
 ### End-to-end test
 
-Install the Chromium browser once:
+Install Chromium once:
 
 ```sh
 pnpm --filter @form-forge/web exec playwright install chromium
 ```
 
-The e2e scenario creates its own Auth.js database session and workspace. It
-does not call GitHub OAuth, the Inngest Dev Server, or public webhook
-receivers. Next.js environment validation still requires non-empty
-`AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` values. It also requires a dedicated
-disposable PostgreSQL database:
+Create a separate disposable database and run Playwright:
 
 ```sh
 createdb form_forge_e2e
-export TEST_DATABASE_URL='postgresql://postgres:postgres@localhost:5432/form_forge_e2e'
+export TEST_DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:5432/form_forge_e2e'
 pnpm test:e2e
 ```
 
-Playwright applies all migrations and truncates this database before and after
-the scenario. Never point `TEST_DATABASE_URL` at development or production.
-The browser test covers UI create and publish, hosted submit, failure
-diagnostics, manual retry, success, and idempotent submission. The integration
-suite separately exercises the PostgreSQL outbox and leases, signatures,
-injected timeout and HTTP failure results, automatic retries, and manual
-recovery. URL resolution and private-address blocking are covered by focused
-unit tests; no test sends a webhook to an external service.
+For Docker, use `docker exec form-forge-postgres createdb -U postgres form_forge_e2e` instead of `createdb`.
 
-### PostgreSQL integration tests
+Stop any application already listening on port 3000 before running e2e. Playwright starts its own Next.js development server connected to the test database. It requires a valid application environment, including non-empty GitHub OAuth variables, but does not call GitHub OAuth, Inngest, or an external webhook receiver. It creates a database session for authentication and supplies its own internal pipeline token.
 
-The delivery and submission integration suite is skipped unless it receives a
-dedicated disposable database. Turbo passes `TEST_DATABASE_URL` through to the
-workspace test task, so the full suite can run with `pnpm test`. Test tasks are
-not cached, so PostgreSQL checks are executed on every run. Never point
-this variable at the development or production database because the suite drops
-and recreates its `public` schema:
+The test covers creating and publishing a form, hosted submission, failure diagnostics, manual retry, successful delivery, and idempotency. Playwright applies migrations and truncates test data before and after the scenario. **Never point it at a database containing data you want to keep.**
 
-```sh
-createdb form_forge_test
-export TEST_DATABASE_URL='postgresql://postgres:postgres@localhost:5432/form_forge_test'
-pnpm test
+## Scope and limitations
 
-# Run only the PostgreSQL integration suite:
-pnpm --filter @form-forge/web exec vitest run \
-  src/integration/pipeline.integration.test.ts
-```
+The MVP uses GitHub sign-in and iframe embedding. It does not include a visual page builder, custom domains, API-key authentication, email invitations, or an embed SDK. Workspace packages are internal and are not published to npm.
 
-The suite applies all Drizzle migrations before testing idempotency,
-submission/outbox atomicity, per-form rate limiting, acceptance of older form
-versions, RBAC, concurrent publication and owner changes, outbox claims,
-poison-event retry limits and sustained dispatch failures, expired delivery
-leases, webhook failures, signatures,
-automatic and manual retries, recovery from a corrupted endpoint secret,
-version restore, endpoint lifecycle, recovery of unprocessed submissions,
-manual retry after an ingestion/acknowledgement crash, and safe streaming CSV
-export with a fixed selection.
-
-## Public contracts
-
-- `GET /api/forms/:slug` returns the current published schema and version identity.
-- `POST /api/forms/:slug/submit` accepts `{ versionId, values, context }` and requires an `Idempotency-Key` header.
-- Hosted forms are available at `/f/:slug`; append `?embed=1` for the iframe layout.
-
-A version that was published for a form remains valid for submissions from an
-already-open hosted page. A version belonging to another form is rejected.
-
-Webhook requests use a versioned JSON envelope and these headers:
-
-```txt
-X-Form-Forge-Id
-X-Form-Forge-Timestamp
-X-Form-Forge-Signature: v1=<hex hmac-sha256>
-```
-
-The signature input is `<timestamp>.<raw-body>`. Endpoint secrets are shown once and stored with AES-256-GCM encryption. Delivery is at-least-once, so webhook consumers must deduplicate requests by `X-Form-Forge-Id`.
-
-Submission throttling uses the client-generated visitor ID by default. Set
-`TRUST_PROXY=1` only when the reverse proxy overwrites `X-Forwarded-For`; in
-that mode the first forwarded address becomes the submission fingerprint.
-
-CSV exports from the submissions inbox preserve the active form and delivery
-status filters and freeze the selected records and display metadata before
-streaming. New submissions and later delivery status changes do not alter an
-export already in progress.
-
-### Public submission limits
-
-- The request body is limited to 8,000,000 bytes.
-- `Idempotency-Key` must contain between 1 and 200 characters.
-- A form and submission may contain at most 100 fields.
-- Short-text and long-text values are limited to 10,000 characters each; email
-  values are limited to 320 characters.
-- The combined text content of one submission is limited to 64,000 characters.
-- UTM values are normalized to at most 200 characters each.
-- When a server or visitor fingerprint is available, a form accepts at most 20
-  submissions from that fingerprint in a rolling 10-minute window. A rejected
-  request returns `429` with `Retry-After: 600`.
-
-CSV export is limited to 10,000 submissions and 500 distinct submitted field
-keys. Exports are streamed and spreadsheet-formula prefixes are escaped.
-
-## Access model
-
-- Owner: all actions, endpoint and membership management.
-- Editor: form editing/publishing, submission access/export, and failed delivery retry.
-- Viewer: read-only forms, versions, submissions, deliveries, and export.
-
-The API checks membership for every admin operation. UI checks only improve usability and are not an authorization boundary.
-
-## Known MVP boundaries
-
-There is no visual builder, drag-and-drop, GraphQL, separate backend, API key flow, custom domain, or published package release process. Embedding uses an iframe; `packages/embed-sdk` will only be introduced when a real SDK contract is required. Email invitations are not included, so a user must sign in once before an owner can add their email to a workspace.
+For an internet-facing deployment, configure real OAuth callback URLs and application URLs, Inngest credentials, HTTPS, stable secrets, database backups, and your proxy's trusted-header behavior. The local Docker credentials and Inngest `local` values are not deployment configuration. Automated tests substitute external services; they do not certify a live deployment.
