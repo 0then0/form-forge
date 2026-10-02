@@ -13,6 +13,11 @@ Draft schemas are validated JSONB snapshots. Publishing creates an immutable `fo
 
 Submission persistence and an outbox event share one PostgreSQL transaction. Inngest drains the outbox, creates one logical delivery per enabled endpoint, and records every HTTP attempt. Product-visible failures are stored in PostgreSQL rather than relying on logs.
 
+The minute-based recovery job also requeues submissions that were ingested but
+did not finish processing within five minutes. Recovery and manual delivery
+retries use fresh event IDs; webhook consumers must still tolerate at-least-once
+delivery.
+
 ## Local development
 
 ### Prerequisites
@@ -40,10 +45,26 @@ createdb form_forge
 
 The username, password, host, and port in `DATABASE_URL` must match your local PostgreSQL installation. The credentials in `.env.example` are only an example.
 
+Alternatively, use a local Docker container (port 5432 must be free):
+
+```sh
+docker run -d --name form-forge-postgres \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=form_forge -p 127.0.0.1:5432:5432 \
+  -v form-forge-postgres-data:/var/lib/postgresql/data postgres:16
+docker exec form-forge-postgres pg_isready -U postgres
+docker exec form-forge-postgres createdb -U postgres form_forge_test
+docker exec form-forge-postgres createdb -U postgres form_forge_e2e
+```
+
+Use `postgresql://postgres:postgres@127.0.0.1:5432/form_forge` locally.
+The named volume preserves database contents when the container stops.
+For subsequent runs, use `docker start form-forge-postgres`.
+
 ### 3. Configure the environment
 
 ```sh
-cp apps/web/.env.example apps/web/.env.local
+cp apps/web/.env.example apps/web/.env
 ```
 
 Generate independent values for `AUTH_SECRET`, `FINGERPRINT_SECRET`, and `WEBHOOK_ENCRYPTION_KEY`. Run this command three times and paste a different result into each variable:
@@ -51,6 +72,11 @@ Generate independent values for `AUTH_SECRET`, `FINGERPRINT_SECRET`, and `WEBHOO
 ```sh
 openssl rand -base64 32
 ```
+
+Both `.env` and `.env.local` are ignored by Git. Next.js reads both, with
+`.env.local` taking precedence. Keep local values in one file to avoid stale
+overrides. Turbo forwards declared environment variables and includes the web
+environment files in its build cache inputs.
 
 For local development:
 
@@ -68,18 +94,18 @@ Create a GitHub OAuth application with:
 - Homepage URL: `http://localhost:3000`
 - Authorization callback URL: `http://localhost:3000/api/auth/callback/github`
 
-Copy its client ID and client secret to `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` in `apps/web/.env.local`.
+Copy its client ID and client secret to `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` in `apps/web/.env`.
 
 ### 5. Apply database migrations
 
-Drizzle Kit runs outside Next.js and does not automatically read `apps/web/.env.local`. Export the same database URL in the terminal before running database commands:
+Drizzle Kit runs outside Next.js and does not automatically read the web environment files. Export the same database URL in the terminal before running database commands:
 
 ```sh
 export DATABASE_URL='postgresql://postgres:postgres@localhost:5432/form_forge'
 pnpm db:migrate
 ```
 
-Replace the example URL with the value from your `.env.local`.
+Replace the example URL with the value from your `.env`.
 
 ### 6. Start the application
 
@@ -160,7 +186,8 @@ unit tests; no test sends a webhook to an external service.
 
 The delivery and submission integration suite is skipped unless it receives a
 dedicated disposable database. Turbo passes `TEST_DATABASE_URL` through to the
-workspace test task, so the full suite can run with `pnpm test`. Never point
+workspace test task, so the full suite can run with `pnpm test`. Test tasks are
+not cached, so PostgreSQL checks are executed on every run. Never point
 this variable at the development or production database because the suite drops
 and recreates its `public` schema:
 
@@ -180,7 +207,9 @@ versions, RBAC, concurrent publication and owner changes, outbox claims,
 poison-event retry limits and sustained dispatch failures, expired delivery
 leases, webhook failures, signatures,
 automatic and manual retries, recovery from a corrupted endpoint secret,
-version restore, endpoint lifecycle, and safe streaming CSV export.
+version restore, endpoint lifecycle, recovery of unprocessed submissions,
+manual retry after an ingestion/acknowledgement crash, and safe streaming CSV
+export with a fixed selection.
 
 ## Public contracts
 
@@ -206,7 +235,9 @@ Submission throttling uses the client-generated visitor ID by default. Set
 that mode the first forwarded address becomes the submission fingerprint.
 
 CSV exports from the submissions inbox preserve the active form and delivery
-status filters.
+status filters and freeze the selected records and display metadata before
+streaming. New submissions and later delivery status changes do not alter an
+export already in progress.
 
 ### Public submission limits
 

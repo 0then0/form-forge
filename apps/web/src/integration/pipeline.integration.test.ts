@@ -47,7 +47,11 @@ import {
   saveDraft,
 } from "@/services/forms";
 import { updateMember } from "@/services/memberships";
-import { dispatchPendingOutbox, enqueueDueDeliveries } from "@/services/outbox";
+import {
+  dispatchPendingOutbox,
+  enqueueDueDeliveries,
+  enqueueUnprocessedSubmissions,
+} from "@/services/outbox";
 import { receiveSubmission } from "@/services/public-forms";
 import {
   exportSubmissionsCsv,
@@ -714,6 +718,147 @@ integration("submission and delivery pipeline", () => {
     expect(sent[0]).toMatchObject({ id: event.id });
   });
 
+  test("recovers an ingested submission whose consumer never completed", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Expected a published version");
+    const [endpoint] = await db
+      .insert(webhookEndpoints)
+      .values({
+        formId: seeded.form.id,
+        name: "Recovery receiver",
+        url: "https://example.com/hook",
+        secretCiphertext: encryptWebhookSecret("recovery-secret"),
+      })
+      .returning();
+    if (!endpoint) throw new Error("Expected a recovery endpoint");
+    const accepted = await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "consumer-exhausted",
+      input: { versionId: seeded.version.id, values: { name: "Recovered" } },
+    });
+    await dispatchPendingOutbox(1, async () => undefined);
+    expect(await enqueueUnprocessedSubmissions()).toBe(0);
+    await db
+      .update(outboxEvents)
+      .set({ sentAt: new Date(Date.now() - 6 * 60_000) });
+    const [original] = await db.select().from(outboxEvents);
+    const claims = await Promise.all([
+      enqueueUnprocessedSubmissions(),
+      enqueueUnprocessedSubmissions(),
+    ]);
+    expect(claims.reduce((sum, claimed) => sum + claimed, 0)).toBe(1);
+    const [replacement] = await db
+      .select()
+      .from(outboxEvents)
+      .where(eq(outboxEvents.status, "pending"));
+    expect(replacement?.id).not.toBe(original?.id);
+    expect(replacement?.payload).toEqual(original?.payload);
+    await dispatchPendingOutbox(1, async () => {
+      const created = await Promise.all([
+        createDeliveriesForSubmission(accepted.id, [endpoint.id]),
+        createDeliveriesForSubmission(accepted.id, [endpoint.id]),
+      ]);
+      expect(created.reduce((sum, count) => sum + count, 0)).toBe(1);
+    });
+    expect(await enqueueUnprocessedSubmissions()).toBe(0);
+    const deliveries = await db.select().from(webhookDeliveries);
+    expect(deliveries).toHaveLength(1);
+    const delivery = deliveries[0];
+    if (!delivery) throw new Error("Expected a recovered delivery");
+    await deliverWebhook(delivery.id, async () => ({
+      ok: true,
+      status: 200,
+      responseExcerpt: "ok",
+    }));
+    const [submission] = await db
+      .select()
+      .from(submissions)
+      .where(eq(submissions.id, accepted.id));
+    expect(submission?.deliveryStatus).toBe("succeeded");
+    expect(await enqueueUnprocessedSubmissions()).toBe(0);
+    const events = await db
+      .select()
+      .from(submissionEvents)
+      .where(eq(submissionEvents.type, "submission.processing_requeued"));
+    expect(events).toHaveLength(1);
+  });
+
+  test("uses a fresh event ID for manual retry after an ingestion/ack crash", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Expected a published version");
+    const [endpoint] = await db
+      .insert(webhookEndpoints)
+      .values({
+        formId: seeded.form.id,
+        name: "Receiver",
+        url: "https://example.com/hook",
+        secretCiphertext: encryptWebhookSecret("test-secret"),
+      })
+      .returning();
+    if (!endpoint) throw new Error("Expected an endpoint");
+    const accepted = await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "manual-crash",
+      input: { versionId: seeded.version.id, values: { name: "Retry" } },
+    });
+    await createDeliveriesForSubmission(accepted.id, [endpoint.id]);
+    const [delivery] = await db.select().from(webhookDeliveries);
+    if (!delivery) throw new Error("Expected a delivery");
+    await db
+      .update(webhookDeliveries)
+      .set({ status: "failed" })
+      .where(eq(webhookDeliveries.id, delivery.id));
+    await db
+      .update(outboxEvents)
+      .set({
+        status: "processing",
+        availableAt: new Date(Date.now() + 5 * 60_000),
+      })
+      .where(eq(outboxEvents.aggregateId, delivery.id));
+    const [oldEvent] = await db
+      .select()
+      .from(outboxEvents)
+      .where(eq(outboxEvents.aggregateId, delivery.id));
+    await requestManualRetry(workspace.slug, delivery.id);
+    const [retryEvent] = await db
+      .select()
+      .from(outboxEvents)
+      .where(
+        and(
+          eq(outboxEvents.aggregateId, delivery.id),
+          eq(outboxEvents.status, "pending"),
+        ),
+      );
+    expect(retryEvent?.id).not.toBe(oldEvent?.id);
+    const seenIds = new Set([oldEvent?.id]);
+    await dispatchPendingOutbox(100, async (event) => {
+      if (
+        event.name !== "form-forge/delivery.requested" ||
+        seenIds.has(event.id)
+      )
+        return;
+      seenIds.add(event.id);
+      await deliverWebhook(delivery.id, async () => ({
+        ok: true,
+        status: 200,
+        responseExcerpt: "ok",
+      }));
+    });
+    const [finished] = await db
+      .select()
+      .from(webhookDeliveries)
+      .where(eq(webhookDeliveries.id, delivery.id));
+    expect(finished?.status).toBe("succeeded");
+  });
+
   test("stops reclaiming an outbox event after its retry budget", async () => {
     const [event] = await db
       .insert(outboxEvents)
@@ -967,6 +1112,50 @@ integration("submission and delivery pipeline", () => {
     expect(csv).toContain("included-row");
     expect(csv).not.toContain("wrong-status");
     expect(csv).not.toContain("wrong-form");
+  });
+
+  test("freezes export membership, columns and statuses before streaming", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Expected a published version");
+    const [original] = await db
+      .insert(submissions)
+      .values({
+        formId: seeded.form.id,
+        formVersionId: seeded.version.id,
+        idempotencyKey: "snapshot-original",
+        deliveryStatus: "succeeded",
+        normalizedValues: { name: "original-value" },
+        receivedValues: { name: "original-value" },
+        utm: {},
+      })
+      .returning();
+    if (!original) throw new Error("Expected a submission");
+    const stream = await exportSubmissionsCsv(workspace.slug, {
+      deliveryStatus: "succeeded",
+    });
+    await db
+      .update(submissions)
+      .set({ deliveryStatus: "failed" })
+      .where(eq(submissions.id, original.id));
+    await db.insert(submissions).values({
+      formId: seeded.form.id,
+      formVersionId: seeded.version.id,
+      idempotencyKey: "snapshot-new",
+      deliveryStatus: "succeeded",
+      normalizedValues: { extra: "new-value" },
+      receivedValues: { extra: "new-value" },
+      utm: {},
+    });
+    const csv = await new Response(stream).text();
+    expect(csv).toContain("original-value");
+    expect(csv).toContain('"succeeded"');
+    expect(csv).not.toContain("new-value");
+    expect(csv).not.toContain('"extra"');
+    expect(csv.trim().split("\r\n")).toHaveLength(2);
   });
 
   test("recovers an expired lease and completes failed then manual retry flow", async () => {

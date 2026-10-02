@@ -105,6 +105,16 @@ test("creates, publishes, submits, fails, retries, and succeeds", async ({
   const formSlug = formRow.rows[0]?.slug;
   if (!formSlug) throw new Error("Published form slug was not found");
 
+  // Exercise the JSONB -> parsed draft -> editor boundary, not identical fixtures.
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Publish" })).toBeDisabled();
+  await expect(page.getByText("unsaved", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await expect(
+    page.getByText(/0 added, 0 changed, 0 removed fields/),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+
   const endpointResponse = await page.request.post(
     "/api/internal/e2e/pipeline",
     {

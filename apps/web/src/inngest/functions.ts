@@ -5,7 +5,11 @@ import {
   createDeliveriesForSubmission,
   deliverWebhook,
 } from "@/services/deliveries";
-import { dispatchPendingOutbox, enqueueDueDeliveries } from "@/services/outbox";
+import {
+  dispatchPendingOutbox,
+  enqueueDueDeliveries,
+  enqueueUnprocessedSubmissions,
+} from "@/services/outbox";
 
 export const processSubmission = inngest.createFunction(
   {
@@ -41,6 +45,9 @@ export const drainOutbox = inngest.createFunction(
     triggers: cron("* * * * *"),
   },
   async ({ step }) => {
+    await step.run("recover-unprocessed-submissions", () =>
+      enqueueUnprocessedSubmissions(),
+    );
     await step.run("enqueue-due-deliveries", () => enqueueDueDeliveries());
     return step.run("dispatch-events", () => dispatchPendingOutbox(50));
   },

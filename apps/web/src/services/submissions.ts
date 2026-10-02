@@ -1,16 +1,6 @@
 import "server-only";
 
-import {
-  and,
-  count,
-  desc,
-  eq,
-  inArray,
-  lt,
-  or,
-  sql,
-  type SQL,
-} from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 
 import { requireWorkspace } from "@/auth/permissions";
 import { db } from "@/db/client";
@@ -252,13 +242,24 @@ export const exportSubmissionsCsv = async (
     );
   }
   const where = and(...conditions);
-  const [rowCount] = await db
-    .select({ value: count() })
+  // Freeze membership and display metadata before starting the stream. Values
+  // are immutable; later submissions/status changes must not alter this export.
+  const selected = await db
+    .select({
+      id: submissions.id,
+      createdAt: submissions.createdAt,
+      deliveryStatus: submissions.deliveryStatus,
+      formName: forms.name,
+      versionNumber: formVersions.versionNumber,
+    })
     .from(submissions)
     .innerJoin(forms, eq(forms.id, submissions.formId))
-    .where(where);
+    .innerJoin(formVersions, eq(formVersions.id, submissions.formVersionId))
+    .where(where)
+    .orderBy(desc(submissions.createdAt), desc(submissions.id))
+    .limit(MAX_EXPORT_ROWS + 1);
 
-  if ((rowCount?.value ?? 0) > MAX_EXPORT_ROWS) {
+  if (selected.length > MAX_EXPORT_ROWS) {
     throw new AppError(
       "VALIDATION_ERROR",
       "This export exceeds 10,000 rows. Filter or archive data before exporting.",
@@ -266,14 +267,17 @@ export const exportSubmissionsCsv = async (
     );
   }
 
-  const keyResult = await db.execute<{ key: string }>(sql`
+  const selectedIds = selected.map(({ id }) => id);
+  const keyResult = selectedIds.length
+    ? await db.execute<{ key: string }>(sql`
     select distinct jsonb_object_keys(${submissions.normalizedValues}) as key
     from ${submissions}
     inner join ${forms} on ${forms.id} = ${submissions.formId}
-    where ${where}
+    where ${inArray(submissions.id, selectedIds)}
     order by key
     limit ${MAX_EXPORT_COLUMNS + 1}
-  `);
+  `)
+    : { rows: [] };
   const valueKeys = keyResult.rows.map((row) => row.key);
   if (valueKeys.length > MAX_EXPORT_COLUMNS) {
     throw new AppError(
@@ -291,7 +295,7 @@ export const exportSubmissionsCsv = async (
     ...valueKeys,
   ];
   const encoder = new TextEncoder();
-  let cursor: SubmissionCursor | undefined;
+  let offset = 0;
 
   await db.insert(auditLogs).values({
     action: "submissions.export_requested",
@@ -301,7 +305,7 @@ export const exportSubmissionsCsv = async (
         ? { deliveryStatus: filters.deliveryStatus }
         : {}),
       ...(filters.formId ? { formId: filters.formId } : {}),
-      rowCount: rowCount?.value ?? 0,
+      rowCount: selected.length,
     },
     resourceType: "submission",
     workspaceId: workspace.id,
@@ -315,56 +319,43 @@ export const exportSubmissionsCsv = async (
     },
     async pull(controller) {
       try {
-        const pageConditions = [...conditions];
-        if (cursor) {
-          const cursorCondition = or(
-            lt(submissions.createdAt, cursor.createdAt),
-            and(
-              eq(submissions.createdAt, cursor.createdAt),
-              lt(submissions.id, cursor.id),
-            ),
-          );
-          if (cursorCondition) pageConditions.push(cursorCondition);
-        }
-        const rows = await db
-          .select({
-            createdAt: submissions.createdAt,
-            deliveryStatus: submissions.deliveryStatus,
-            formName: forms.name,
-            id: submissions.id,
-            normalizedValues: submissions.normalizedValues,
-            versionNumber: formVersions.versionNumber,
-          })
-          .from(submissions)
-          .innerJoin(forms, eq(forms.id, submissions.formId))
-          .innerJoin(
-            formVersions,
-            eq(formVersions.id, submissions.formVersionId),
-          )
-          .where(and(...pageConditions))
-          .orderBy(desc(submissions.createdAt), desc(submissions.id))
-          .limit(CSV_BATCH_SIZE);
-
-        if (rows.length === 0) {
+        const batch = selected.slice(offset, offset + CSV_BATCH_SIZE);
+        if (batch.length === 0) {
           controller.close();
           return;
         }
+        const rows = await db
+          .select({
+            id: submissions.id,
+            normalizedValues: submissions.normalizedValues,
+          })
+          .from(submissions)
+          .where(
+            inArray(
+              submissions.id,
+              batch.map(({ id }) => id),
+            ),
+          );
+        const valuesById = new Map(
+          rows.map((row) => [row.id, row.normalizedValues]),
+        );
 
-        const lines = rows.map((row) =>
-          [
+        const lines = batch.map((row) => {
+          const values = valuesById.get(row.id);
+          if (!values)
+            throw new Error("An exported submission is no longer available");
+          return [
             row.id,
             row.formName,
             row.versionNumber,
             row.createdAt.toISOString(),
             row.deliveryStatus,
-            ...valueKeys.map((key) => row.normalizedValues[key]),
+            ...valueKeys.map((key) => values[key]),
           ]
             .map(escapeCsv)
-            .join(","),
-        );
-        const last = rows.at(-1);
-        if (!last) throw new Error("CSV batch did not contain a cursor row");
-        cursor = { createdAt: last.createdAt, id: last.id };
+            .join(",");
+        });
+        offset += batch.length;
         controller.enqueue(encoder.encode(`${lines.join("\r\n")}\r\n`));
       } catch (error) {
         controller.error(error);

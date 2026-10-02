@@ -71,11 +71,17 @@ export const createDeliveriesForSubmission = async (
 ) =>
   db.transaction(async (tx) => {
     const [submission] = await tx
-      .select({ formId: submissions.formId, id: submissions.id })
+      .select({
+        formId: submissions.formId,
+        id: submissions.id,
+        deliveryStatus: submissions.deliveryStatus,
+      })
       .from(submissions)
       .where(eq(submissions.id, submissionId))
-      .limit(1);
+      .limit(1)
+      .for("update");
     if (!submission) throw notFoundError("Submission not found");
+    if (submission.deliveryStatus !== "pending") return 0;
 
     const endpoints =
       endpointIds?.length === 0
@@ -599,13 +605,14 @@ export const requestManualRetry = async (
     }
 
     const retryRequestedAt = new Date();
-    const [rescheduledEvent] = await tx
+    // An active command may already have been accepted by Inngest before a
+    // dispatcher crash. A new manual attempt must get a fresh event ID.
+    await tx
       .update(outboxEvents)
       .set({
-        availableAt: retryRequestedAt,
-        lastError: null,
-        sentAt: null,
-        status: "pending",
+        lastError: "Superseded by a manual retry",
+        sentAt: retryRequestedAt,
+        status: "sent",
       })
       .where(
         and(
@@ -617,16 +624,13 @@ export const requestManualRetry = async (
             eq(outboxEvents.status, "failed"),
           ),
         ),
-      )
-      .returning({ id: outboxEvents.id });
-    if (!rescheduledEvent) {
-      await tx.insert(outboxEvents).values({
-        aggregateId: validDeliveryId,
-        availableAt: retryRequestedAt,
-        payload: { deliveryId: validDeliveryId },
-        type: "delivery.requested",
-      });
-    }
+      );
+    await tx.insert(outboxEvents).values({
+      aggregateId: validDeliveryId,
+      availableAt: retryRequestedAt,
+      payload: { deliveryId: validDeliveryId },
+      type: "delivery.requested",
+    });
     await tx
       .update(webhookDeliveries)
       .set({

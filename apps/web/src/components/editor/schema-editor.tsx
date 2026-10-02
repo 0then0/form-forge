@@ -21,6 +21,7 @@ import { PreviewErrorBoundary } from "./preview-error-boundary";
 import { SchemaPreview } from "./schema-preview";
 import { useUnsavedChangesWarning } from "./use-unsaved-changes-warning";
 import { VersionHistory } from "./version-history";
+import { schemaFingerprint } from "./schema-comparison";
 
 type Version = {
   id: string;
@@ -49,28 +50,10 @@ const summarizeSchema = (
 ): EditorStatus => ({
   changedSincePublish:
     lastPublishedSchema === undefined ||
-    JSON.stringify(schema) !== JSON.stringify(lastPublishedSchema),
+    schemaFingerprint(schema) !== schemaFingerprint(lastPublishedSchema),
   fieldCount: schema.fields.length,
   valid: formSchemaV1Schema.safeParse(schema).success,
 });
-
-const schemaFingerprint = (schema: unknown): string => {
-  const parsed = formSchemaV1Schema.safeParse(schema);
-  if (!parsed.success) return JSON.stringify(schema);
-
-  return JSON.stringify({
-    ...parsed.data,
-    description: parsed.data.description || undefined,
-    fields: parsed.data.fields.map((field) => ({
-      ...field,
-      description: field.description || undefined,
-      ...("placeholder" in field
-        ? { placeholder: field.placeholder || undefined }
-        : {}),
-      webhookKey: field.webhookKey || undefined,
-    })),
-  });
-};
 
 const path = (value: string) => value as FieldPath<FormSchemaV1>;
 
@@ -116,6 +99,7 @@ export const SchemaEditor = ({
   );
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [notice, setNotice] = useState<string>();
+  const [restoring, setRestoring] = useState(false);
   const form = useForm<FormSchemaV1>({ defaultValues: initialSchema });
   const { handleSubmit, register, reset, setError } = form;
 
@@ -242,6 +226,7 @@ export const SchemaEditor = ({
       <EditorHeaderWithTitle
         canPublish={
           canEdit &&
+          !restoring &&
           !publishMutation.isPending &&
           !saveMutation.isPending &&
           editorStatus.fieldCount > 0 &&
@@ -250,6 +235,7 @@ export const SchemaEditor = ({
         }
         canSave={
           canEdit &&
+          !restoring &&
           !saveMutation.isPending &&
           !publishMutation.isPending &&
           hasUnsavedChanges &&
@@ -293,12 +279,16 @@ export const SchemaEditor = ({
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
         <div className="space-y-5">
-          <FormSettings canEdit={canEdit} register={register} />
-          <FieldsEditor canEdit={canEdit} form={form} />
+          <FormSettings canEdit={canEdit && !restoring} register={register} />
+          <FieldsEditor canEdit={canEdit && !restoring} form={form} />
         </div>
 
         <EditorSidebar
-          canEdit={canEdit}
+          canEdit={
+            canEdit && !saveMutation.isPending && !publishMutation.isPending
+          }
+          onRestoringChange={setRestoring}
+          restoring={restoring}
           draftRevision={draftRevision}
           form={form}
           formId={formId}
@@ -339,6 +329,8 @@ const EditorSidebar = ({
   formId,
   initialVersionCursor,
   onRestore,
+  onRestoringChange,
+  restoring,
   publicBaseUrl,
   publicSlug,
   published,
@@ -355,6 +347,8 @@ const EditorSidebar = ({
     versionNumber: number,
     draftRevision: string,
   ) => void;
+  onRestoringChange: (restoring: boolean) => void;
+  restoring: boolean;
   publicBaseUrl: string;
   publicSlug: string;
   published: boolean;
@@ -400,6 +394,7 @@ const EditorSidebar = ({
           initialCursor={initialVersionCursor}
           workspaceSlug={workspaceSlug}
           onRestore={onRestore}
+          onRestoringChange={onRestoringChange}
         />
         <Card>
           <CardContent>
@@ -409,7 +404,7 @@ const EditorSidebar = ({
               versions.
             </p>
             <ArchiveFormButton
-              disabled={!canEdit}
+              disabled={!canEdit || restoring}
               formId={formId}
               workspaceSlug={workspaceSlug}
             />

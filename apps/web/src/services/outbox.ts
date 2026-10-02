@@ -91,6 +91,52 @@ const getSubmissionIdForOutboxEvent = async (event: {
   return delivery?.submissionId ?? null;
 };
 
+// Ingestion acknowledgements do not guarantee that the consumer completed.
+// Requeue stranded submissions with a fresh ID after its processing grace period.
+export const enqueueUnprocessedSubmissions = async () =>
+  db.transaction(async (tx) => {
+    const recovered = await tx.execute<{ submissionId: string }>(sql`
+      with candidates as (
+        select submission.id, latest.payload
+        from submissions as submission
+        join lateral (
+          select payload, sent_at
+          from outbox_events
+          where aggregate_id = submission.id
+            and type = 'submission.received' and status = 'sent'
+          order by created_at desc, id desc
+          limit 1
+        ) as latest on true
+        where submission.delivery_status = 'pending'
+          and latest.sent_at <= now() - interval '5 minutes'
+          and not exists (
+            select 1 from webhook_deliveries where submission_id = submission.id
+          )
+          and not exists (
+            select 1 from outbox_events where aggregate_id = submission.id
+              and type = 'submission.received' and status in ('pending', 'processing', 'failed')
+          )
+        order by submission.created_at, submission.id
+        for update of submission skip locked
+        limit 100
+      )
+      insert into outbox_events (aggregate_id, type, payload)
+      select id, 'submission.received', payload from candidates
+      on conflict do nothing
+      returning aggregate_id as "submissionId"
+    `);
+    if (recovered.rows.length > 0) {
+      await tx.insert(submissionEvents).values(
+        recovered.rows.map(({ submissionId }) => ({
+          submissionId,
+          type: "submission.processing_requeued",
+          data: { reason: "Processing did not complete after event ingestion" },
+        })),
+      );
+    }
+    return recovered.rows.length;
+  });
+
 export const dispatchPendingOutbox = async (
   limit = 25,
   send: (event: OutboxEvent) => Promise<unknown> = (event) =>

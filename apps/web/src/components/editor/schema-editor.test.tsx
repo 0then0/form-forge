@@ -1,4 +1,4 @@
-import type { FormSchemaV1 } from "@form-forge/form-schema";
+import { formSchemaV1Schema, type FormSchemaV1 } from "@form-forge/form-schema";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -119,7 +119,7 @@ describe("SchemaEditor", () => {
         canEdit
         formId="form-id"
         initialDraftRevision={revision}
-        initialSchema={schema}
+        initialSchema={formSchemaV1Schema.parse(schema)}
         publicBaseUrl="http://localhost:3000"
         publicSlug="contact"
         published
@@ -137,6 +137,98 @@ describe("SchemaEditor", () => {
     );
 
     expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
+  });
+
+  it("locks editing and mutations until a delayed restore completes", async () => {
+    let finishRestore: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      finishRestore = resolve;
+    });
+    server.use(
+      http.post(
+        "/api/admin/workspaces/workspace/forms/form-id/versions/version-id/restore",
+        async () => {
+          await pending;
+          return HttpResponse.json({
+            data: {
+              draftRevision: "2026-08-15T12:02:00.000Z",
+              draftSchema: { ...schema, title: "Restored title" },
+              versionNumber: 1,
+            },
+          });
+        },
+      ),
+    );
+    const user = userEvent.setup();
+    render(
+      <SchemaEditor
+        canEdit
+        formId="form-id"
+        initialDraftRevision={revision}
+        initialSchema={schema}
+        publicBaseUrl="http://localhost:3000"
+        publicSlug="contact"
+        published
+        versions={[
+          { id: "version-id", publishedAt: revision, schema, versionNumber: 1 },
+        ]}
+        workspaceSlug="workspace"
+      />,
+      { wrapper },
+    );
+    await user.type(screen.getByLabelText("Title"), " edited");
+    await user.click(screen.getByRole("button", { name: "Inspect" }));
+    await user.click(screen.getByRole("button", { name: "Use as draft" }));
+    await user.click(screen.getByRole("button", { name: "Close dialog" }));
+    expect(screen.getByLabelText("Title")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add field" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
+    await user.type(screen.getByLabelText("Title"), " lost edit");
+    expect(screen.getByLabelText("Title")).toHaveValue("Contact edited");
+    finishRestore?.();
+    await screen.findByText("Version 1 restored as draft");
+    expect(screen.getByLabelText("Title")).toBeEnabled();
+    expect(screen.getByLabelText("Title")).toHaveValue("Restored title");
+    expect(screen.queryByText("unsaved")).not.toBeInTheDocument();
+  });
+
+  it("unlocks and preserves the draft when restore fails", async () => {
+    server.use(
+      http.post(
+        "/api/admin/workspaces/workspace/forms/form-id/versions/version-id/restore",
+        () =>
+          HttpResponse.json(
+            { error: { code: "CONFLICT", message: "Draft conflict" } },
+            { status: 409 },
+          ),
+      ),
+    );
+    const user = userEvent.setup();
+    render(
+      <SchemaEditor
+        canEdit
+        formId="form-id"
+        initialDraftRevision={revision}
+        initialSchema={schema}
+        publicBaseUrl="http://localhost:3000"
+        publicSlug="contact"
+        published
+        versions={[
+          { id: "version-id", publishedAt: revision, schema, versionNumber: 1 },
+        ]}
+        workspaceSlug="workspace"
+      />,
+      { wrapper },
+    );
+    await user.type(screen.getByLabelText("Title"), " edited");
+    await user.click(screen.getByRole("button", { name: "Inspect" }));
+    await user.click(screen.getByRole("button", { name: "Use as draft" }));
+    await screen.findByText("Draft conflict");
+    await user.click(screen.getByRole("button", { name: "Close dialog" }));
+    expect(screen.getByLabelText("Title")).toBeEnabled();
+    expect(screen.getByLabelText("Title")).toHaveValue("Contact edited");
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
   });
 
   it("does not mark a cleared optional field as an unsaved change", async () => {

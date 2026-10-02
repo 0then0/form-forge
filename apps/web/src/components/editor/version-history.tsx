@@ -1,6 +1,6 @@
 "use client";
 
-import type { FormSchemaV1 } from "@form-forge/form-schema";
+import { formSchemaV1Schema, type FormSchemaV1 } from "@form-forge/form-schema";
 import {
   Alert,
   Button,
@@ -17,6 +17,7 @@ import { useState } from "react";
 
 import { readApiData } from "@/lib/client-api";
 import { LocalDateTime } from "@/components/local-date-time";
+import { normalizeSchemaForComparison } from "./schema-comparison";
 
 type Version = {
   id: string;
@@ -26,20 +27,34 @@ type Version = {
 };
 
 const compareSchemas = (version: FormSchemaV1, draft: FormSchemaV1) => {
-  const oldFields = new Map(version.fields.map((field) => [field.id, field]));
-  const draftFields = new Map(draft.fields.map((field) => [field.id, field]));
-  const added = draft.fields.filter((field) => !oldFields.has(field.id)).length;
-  const removed = version.fields.filter(
+  const comparedVersion = normalizeSchemaForComparison(
+    formSchemaV1Schema.parse(version),
+  );
+  const parsedDraft = formSchemaV1Schema.safeParse(draft);
+  const comparedDraft = normalizeSchemaForComparison(
+    parsedDraft.success ? parsedDraft.data : draft,
+  );
+  const oldFields = new Map(
+    comparedVersion.fields.map((field) => [field.id, field]),
+  );
+  const draftFields = new Map(
+    comparedDraft.fields.map((field) => [field.id, field]),
+  );
+  const added = comparedDraft.fields.filter(
+    (field) => !oldFields.has(field.id),
+  ).length;
+  const removed = comparedVersion.fields.filter(
     (field) => !draftFields.has(field.id),
   ).length;
-  const changed = draft.fields.filter((field) => {
+  const changed = comparedDraft.fields.filter((field) => {
     const previous = oldFields.get(field.id);
     return previous && JSON.stringify(previous) !== JSON.stringify(field);
   }).length;
   const formSettingsChanged =
-    version.title !== draft.title ||
-    version.description !== draft.description ||
-    JSON.stringify(version.settings) !== JSON.stringify(draft.settings);
+    comparedVersion.title !== comparedDraft.title ||
+    comparedVersion.description !== comparedDraft.description ||
+    JSON.stringify(comparedVersion.settings) !==
+      JSON.stringify(comparedDraft.settings);
   const orderChanged =
     JSON.stringify(version.fields.map((field) => field.id)) !==
     JSON.stringify(draft.fields.map((field) => field.id));
@@ -53,6 +68,7 @@ export const VersionHistory = ({
   formId,
   initialCursor,
   onRestore,
+  onRestoringChange,
   versions,
   workspaceSlug,
 }: {
@@ -66,6 +82,7 @@ export const VersionHistory = ({
     versionNumber: number,
     draftRevision: string,
   ) => void;
+  onRestoringChange?: (restoring: boolean) => void;
   versions: Version[];
   workspaceSlug: string;
 }) => {
@@ -116,6 +133,7 @@ export const VersionHistory = ({
       return;
     setError(undefined);
     setRestoringId(version.id);
+    onRestoringChange?.(true);
     try {
       const response = await fetch(
         `/api/admin/workspaces/${workspaceSlug}/forms/${formId}/versions/${version.id}/restore`,
@@ -141,6 +159,7 @@ export const VersionHistory = ({
       );
     } finally {
       setRestoringId(undefined);
+      onRestoringChange?.(false);
     }
   };
 
