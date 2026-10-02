@@ -4,12 +4,13 @@
 
 [![Node.js requirement](https://img.shields.io/badge/Node.js-%3E%3D22.12.0-339933?logo=nodedotjs&logoColor=white)](package.json)
 [![pnpm version](https://img.shields.io/badge/pnpm-10.33.2-F69220?logo=pnpm&logoColor=white)](package.json)
-[![Project status: MVP](https://img.shields.io/badge/status-MVP-2563eb)](#scope-and-limitations)
+[![Project status: beta](https://img.shields.io/badge/status-beta-2563eb)](#scope-and-limitations)
+[![CI](https://github.com/0then0/form-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/0then0/form-forge/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/0then0/form-forge)](LICENSE)
 
 Form Forge is a schema-first, headless form platform. Define a form, publish an immutable version, collect responses, and deliver them to signed webhooks with inspectable attempts and retries.
 
-This is an MVP learning project, not a drag-and-drop builder or a managed production service. Its focus is explicit contracts, versioned data, reliable background delivery, and a usable administration interface.
+This is a personal project in beta, intended for local use and testing. It is not a drag-and-drop builder or a managed production service. Its focus is explicit contracts, versioned data, reliable background delivery, and a usable administration interface.
 
 ## Features
 
@@ -239,6 +240,12 @@ pnpm db:studio     # Open Drizzle Studio
 
 Database commands require `DATABASE_URL` in the shell. Lefthook formats and lints staged source files before commits; it does not run tests.
 
+### Continuous integration
+
+[GitHub Actions](.github/workflows/ci.yml) runs on pull requests and pushes to `main`. It installs locked dependencies, applies migrations to an empty PostgreSQL database, checks formatting, types, lint, and unused code, and runs unit tests, PostgreSQL integration tests, a production build, and the browser lifecycle test.
+
+The workflow uses PostgreSQL 16 with separate application, integration, and e2e databases. Application keys are generated for each run; OAuth and Inngest values are test placeholders. No repository secrets or external accounts are required. Failed browser runs retain reports and traces for seven days.
+
 ### PostgreSQL integration tests
 
 Without `TEST_DATABASE_URL`, `pnpm test` runs unit tests and skips the PostgreSQL suite. To include integration tests, create a dedicated disposable database:
@@ -290,6 +297,8 @@ The test covers creating and publishing a form, hosted submission, failure diagn
 
 ## Scope and limitations
 
-The MVP uses GitHub sign-in and iframe embedding. It does not include a visual page builder, custom domains, API-key authentication, email invitations, or an embed SDK. Workspace packages are internal and are not published to npm.
+Beta covers the complete form lifecycle and its automated regression checks, with CI configured for each pull request and push to `main`. It is a local testing milestone, not a production-readiness guarantee; interfaces may still change.
+
+The application uses GitHub sign-in and iframe embedding. It does not include a visual page builder, custom domains, API-key authentication, email invitations, or an embed SDK. Workspace packages are internal and are not published to npm.
 
 For an internet-facing deployment, configure real OAuth callback URLs and application URLs, Inngest credentials, HTTPS, stable secrets, database backups, and your proxy's trusted-header behavior. The local Docker credentials and Inngest `local` values are not deployment configuration. Automated tests substitute external services; they do not certify a live deployment.

@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: form_forge_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d form_forge_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/form_forge_ci
+      NEXTAUTH_URL: http://localhost:3000
+      APP_URL: http://localhost:3000
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      # Non-secret placeholders: the tests do not call GitHub or Inngest.
+      AUTH_GITHUB_ID: ci-placeholder
+      AUTH_GITHUB_SECRET: ci-placeholder
+      INNGEST_DEV: "1"
+      INNGEST_EVENT_KEY: local
+      INNGEST_SIGNING_KEY: local
+      TRUST_PROXY: "0"
+      NEXT_TELEMETRY_DISABLED: "1"
+      TURBO_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - name: Generate disposable application keys
+        run: |
+          for key in AUTH_SECRET FINGERPRINT_SECRET WEBHOOK_ENCRYPTION_KEY; do
+            printf '%s=%s\n' "$key" "$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+          done
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create isolated test databases
+        run: |
+          docker exec ${{ job.services.postgres.id }} createdb -U postgres form_forge_test
+          docker exec ${{ job.services.postgres.id }} createdb -U postgres form_forge_e2e
+
+      - name: Apply migrations to an empty database
+        run: pnpm db:migrate
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Check types
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Check unused code
+        run: pnpm knip
+
+      - name: Unit and PostgreSQL integration tests
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/form_forge_test
+        run: pnpm test
+
+      - name: Production build
+        run: pnpm build
+
+      - name: Install Chromium
+        run: pnpm --filter @form-forge/web exec playwright install --with-deps chromium
+
+      - name: Browser lifecycle test
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/form_forge_e2e
+        run: pnpm test:e2e
+
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-diagnostics
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
