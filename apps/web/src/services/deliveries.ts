@@ -83,6 +83,15 @@ export const createDeliveriesForSubmission = async (
     if (!submission) throw notFoundError("Submission not found");
     if (submission.deliveryStatus !== "pending") return 0;
 
+    // The whole delivery set is created atomically. A replay must not insert
+    // conflicting rows while a completion transaction holds a delivery lock.
+    const [existingDelivery] = await tx
+      .select({ id: webhookDeliveries.id })
+      .from(webhookDeliveries)
+      .where(eq(webhookDeliveries.submissionId, submissionId))
+      .limit(1);
+    if (existingDelivery) return 0;
+
     const endpoints =
       endpointIds?.length === 0
         ? []

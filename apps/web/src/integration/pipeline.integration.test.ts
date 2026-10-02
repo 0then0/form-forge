@@ -53,6 +53,7 @@ import {
   enqueueUnprocessedSubmissions,
 } from "@/services/outbox";
 import { receiveSubmission } from "@/services/public-forms";
+import { reconcileSubmissionDeliveryStatus } from "@/services/submission-delivery-status";
 import {
   exportSubmissionsCsv,
   getSubmissionDetail,
@@ -785,6 +786,100 @@ integration("submission and delivery pipeline", () => {
       .from(submissionEvents)
       .where(eq(submissionEvents.type, "submission.processing_requeued"));
     expect(events).toHaveLength(1);
+  });
+
+  test("replays delivery creation without waiting on a completing delivery", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Expected a published version");
+    const [endpoint] = await db
+      .insert(webhookEndpoints)
+      .values({
+        formId: seeded.form.id,
+        name: "Receiver",
+        url: "https://example.com/hook",
+        secretCiphertext: encryptWebhookSecret("test-secret"),
+      })
+      .returning();
+    if (!endpoint) throw new Error("Expected an endpoint");
+    const accepted = await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "creation-completion-race",
+      input: { versionId: seeded.version.id, values: { name: "Ada" } },
+    });
+    await createDeliveriesForSubmission(accepted.id, [endpoint.id]);
+    const [delivery] = await db.select().from(webhookDeliveries);
+    if (!delivery) throw new Error("Expected a delivery");
+    const initialOutbox = await db
+      .select()
+      .from(outboxEvents)
+      .orderBy(outboxEvents.id);
+    const initialEvents = await db
+      .select()
+      .from(submissionEvents)
+      .orderBy(submissionEvents.id);
+
+    let signalLocked = () => {};
+    const locked = new Promise<void>((resolve) => {
+      signalLocked = resolve;
+    });
+    let releaseCompletion = () => {};
+    const release = new Promise<void>((resolve) => {
+      releaseCompletion = resolve;
+    });
+    const completion = db.transaction(async (tx) => {
+      await tx
+        .update(webhookDeliveries)
+        .set({ status: "succeeded" })
+        .where(eq(webhookDeliveries.id, delivery.id));
+      signalLocked();
+      await release;
+      await reconcileSubmissionDeliveryStatus(tx, accepted.id);
+    });
+
+    await locked;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const replay = Promise.all([
+      createDeliveriesForSubmission(accepted.id, [endpoint.id]),
+      createDeliveriesForSubmission(accepted.id, []),
+      createDeliveriesForSubmission(accepted.id),
+    ]);
+    try {
+      // The replay must finish before completion releases its delivery lock.
+      expect(
+        await Promise.race([
+          replay,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("Replay waited on the delivery lock")),
+              2_000,
+            );
+          }),
+        ]),
+      ).toEqual([0, 0, 0]);
+    } finally {
+      clearTimeout(timer);
+      releaseCompletion();
+      await Promise.allSettled([completion, replay]);
+    }
+    await completion;
+    const [finished] = await db
+      .select()
+      .from(submissions)
+      .where(eq(submissions.id, accepted.id));
+    expect(finished?.deliveryStatus).toBe("succeeded");
+    expect(await db.select().from(webhookDeliveries)).toMatchObject([
+      { id: delivery.id, status: "succeeded" },
+    ]);
+    expect(
+      await db.select().from(outboxEvents).orderBy(outboxEvents.id),
+    ).toEqual(initialOutbox);
+    expect(
+      await db.select().from(submissionEvents).orderBy(submissionEvents.id),
+    ).toEqual(initialEvents);
   });
 
   test("uses a fresh event ID for manual retry after an ingestion/ack crash", async () => {
