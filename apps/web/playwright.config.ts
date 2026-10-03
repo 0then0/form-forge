@@ -6,6 +6,7 @@ process.env.E2E_PIPELINE_TOKEN = e2ePipelineToken;
 
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: "**/production-smoke.spec.ts",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,

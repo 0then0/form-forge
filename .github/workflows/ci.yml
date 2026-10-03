@@ -91,9 +91,6 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/form_forge_test
         run: pnpm test
 
-      - name: Production build
-        run: pnpm build
-
       - name: Install Chromium
         run: pnpm --filter @form-forge/web exec playwright install --with-deps chromium
 
@@ -101,6 +98,18 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/form_forge_e2e
         run: pnpm test:e2e
+
+      - name: Production build
+        env:
+          APP_URL: https://forms.example.org
+          NEXTAUTH_URL: https://forms.example.org
+          NEXT_PUBLIC_APP_URL: https://forms.example.org
+        run: pnpm build
+
+      - name: Production smoke test
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/form_forge_e2e
+        run: pnpm test:production
 
       - name: Upload browser diagnostics
         if: ${{ !cancelled() }}

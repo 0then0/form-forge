@@ -21,6 +21,11 @@ import {
 } from "@/db/schema";
 import { env } from "@/env";
 import { AppError, notFoundError } from "@/lib/errors";
+import {
+  MAX_DAILY_SUBMISSIONS,
+  MAX_DAILY_DELIVERIES,
+} from "@/lib/usage-policy";
+import { consumeUsage } from "./usage";
 
 const hashFingerprint = (value: string): string =>
   createHmac("sha256", env.FINGERPRINT_SECRET).update(value).digest("hex");
@@ -167,6 +172,7 @@ export const receiveSubmission = async ({
     const [activeForm] = await tx
       .select({
         status: forms.status,
+        workspaceId: forms.workspaceId,
       })
       .from(forms)
       .where(eq(forms.id, published.form.id))
@@ -214,6 +220,30 @@ export const receiveSubmission = async ({
     }
 
     await enforceSubmissionRate(tx, published.form.id, fingerprintHash);
+
+    const endpointIds = await tx
+      .select({ id: webhookEndpoints.id })
+      .from(webhookEndpoints)
+      .where(
+        and(
+          eq(webhookEndpoints.formId, published.form.id),
+          eq(webhookEndpoints.enabled, true),
+          isNull(webhookEndpoints.archivedAt),
+        ),
+      );
+    await consumeUsage(
+      tx,
+      `submissions:${activeForm.workspaceId}`,
+      MAX_DAILY_SUBMISSIONS,
+      86_400,
+    );
+    await consumeUsage(
+      tx,
+      `deliveries:${activeForm.workspaceId}`,
+      MAX_DAILY_DELIVERIES,
+      86_400,
+      endpointIds.length,
+    );
 
     const [created] = await tx
       .insert(submissions)
@@ -269,16 +299,6 @@ export const receiveSubmission = async ({
       submissionId: created.id,
       type: "submission.received",
     });
-    const endpointIds = await tx
-      .select({ id: webhookEndpoints.id })
-      .from(webhookEndpoints)
-      .where(
-        and(
-          eq(webhookEndpoints.formId, published.form.id),
-          eq(webhookEndpoints.enabled, true),
-          isNull(webhookEndpoints.archivedAt),
-        ),
-      );
     await tx.insert(outboxEvents).values({
       aggregateId: created.id,
       payload: {

@@ -59,7 +59,11 @@ export const apiError = (
       },
       {
         ...(error.code === "RATE_LIMITED"
-          ? { headers: { "Retry-After": "600" } }
+          ? {
+              headers: {
+                "Retry-After": String(error.retryAfterSeconds ?? 600),
+              },
+            }
           : {}),
         status: error.status,
       },

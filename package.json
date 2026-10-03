@@ -8,10 +8,12 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
+    "start": "pnpm --filter @form-forge/web start",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "test:e2e": "pnpm --filter @form-forge/web test:e2e",
+    "test:production": "pnpm --filter @form-forge/web test:production",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "knip": "knip",

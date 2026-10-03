@@ -23,7 +23,9 @@ test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
   await migrate(database, { migrationsFolder });
-  await pool.query("truncate table outbox_events, users, workspaces cascade");
+  await pool.query(
+    "truncate table usage_buckets, outbox_events, users, workspaces cascade",
+  );
   const user = await pool.query<{ id: string }>(
     `insert into users (email, name)
      values ($1, 'Playwright user')
@@ -53,7 +55,9 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await pool.query("truncate table outbox_events, users, workspaces cascade");
+  await pool.query(
+    "truncate table usage_buckets, outbox_events, users, workspaces cascade",
+  );
   await pool.end();
 });
 

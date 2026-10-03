@@ -31,6 +31,7 @@ import {
   webhookDeliveries,
   webhookEndpoints,
   workspaces,
+  usageBuckets,
 } from "@/db/schema";
 import { encryptWebhookSecret } from "@/integration/webhooks/crypto";
 import { AppError } from "@/lib/errors";
@@ -53,6 +54,12 @@ import {
   enqueueUnprocessedSubmissions,
 } from "@/services/outbox";
 import { receiveSubmission } from "@/services/public-forms";
+import {
+  consumeUsage,
+  limitSubmitRequest,
+  removeExpiredUsage,
+} from "@/services/usage";
+import { inspectPipelineHealth } from "@/services/pipeline-health";
 import { reconcileSubmissionDeliveryStatus } from "@/services/submission-delivery-status";
 import {
   exportSubmissionsCsv,
@@ -61,9 +68,19 @@ import {
 } from "@/services/submissions";
 import {
   archiveWebhookEndpoint,
+  createWebhookEndpoint,
   rotateWebhookEndpointSecret,
   updateWebhookEndpoint,
 } from "@/services/webhook-endpoints";
+import {
+  MAX_DAILY_SUBMISSIONS,
+  MAX_DAILY_DELIVERIES,
+  MAX_WEBHOOK_ENDPOINTS,
+} from "@/lib/usage-policy";
+
+vi.mock("@/integration/webhooks/url-policy", () => ({
+  validateWebhookUrl: vi.fn(async (url: string) => url),
+}));
 
 const integration = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 const migrationsFolder = fileURLToPath(
@@ -160,7 +177,7 @@ integration("submission and delivery pipeline", () => {
 
   beforeEach(async () => {
     await db.execute(
-      sql`truncate table outbox_events, users, workspaces cascade`,
+      sql`truncate table usage_buckets, outbox_events, users, workspaces cascade`,
     );
   });
 
@@ -189,8 +206,253 @@ integration("submission and delivery pipeline", () => {
       hasActiveAttemptUrl: true,
       hasLease: true,
       hasRequestUrl: true,
-      tableCount: 15,
+      tableCount: 16,
     });
+  });
+
+  test("migration initializes today's reservations and refuses excess endpoints without deleting them", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      workspaceId: workspace.id,
+      userId: user.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    await createWebhookEndpoint(workspace.slug, seeded.form.id, {
+      name: "Existing",
+      url: "https://receiver.example.org",
+    });
+    await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "before-migration",
+      input: { versionId: seeded.version.id, values: { name: "Existing" } },
+    });
+    const resetLastMigration = async () => {
+      await db.execute(sql`drop table usage_buckets`);
+      await db.execute(
+        sql`delete from drizzle.__drizzle_migrations where created_at = (select max(created_at) from drizzle.__drizzle_migrations)`,
+      );
+    };
+    await resetLastMigration();
+    await migrate(db, { migrationsFolder });
+    expect(
+      await db
+        .select()
+        .from(usageBuckets)
+        .where(eq(usageBuckets.key, `submissions:${workspace.id}`)),
+    ).toMatchObject([{ count: 1 }]);
+    expect(
+      await db
+        .select()
+        .from(usageBuckets)
+        .where(eq(usageBuckets.key, `deliveries:${workspace.id}`)),
+    ).toMatchObject([{ count: 1 }]);
+
+    const extra = await db
+      .insert(webhookEndpoints)
+      .values(
+        Array.from({ length: 5 }, () => ({
+          formId: seeded.form.id,
+          name: "Legacy",
+          url: "https://receiver.example.org",
+          secretCiphertext: encryptWebhookSecret("legacy"),
+        })),
+      )
+      .returning({ id: webhookEndpoints.id });
+    await resetLastMigration();
+    try {
+      await expect(migrate(db, { migrationsFolder })).rejects.toThrow();
+      expect(
+        await db
+          .select()
+          .from(webhookEndpoints)
+          .where(eq(webhookEndpoints.formId, seeded.form.id)),
+      ).toHaveLength(6);
+    } finally {
+      const last = extra[0];
+      if (last)
+        await db
+          .update(webhookEndpoints)
+          .set({ archivedAt: new Date() })
+          .where(eq(webhookEndpoints.id, last.id));
+      await migrate(db, { migrationsFolder });
+    }
+    expect(await db.select().from(submissions)).toHaveLength(1);
+  });
+
+  test("enforces request budgets atomically across concurrent callers and resets expired windows", async () => {
+    const results = await Promise.allSettled(
+      Array.from({ length: 64 }, () => limitSubmitRequest("198.51.100.44")),
+    );
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(60);
+    expect(
+      results.filter((result) => result.status === "rejected"),
+    ).toHaveLength(4);
+    const [bucket] = await db.select().from(usageBuckets);
+    expect(bucket?.count).toBe(61);
+    await db
+      .update(usageBuckets)
+      .set({ expiresAt: new Date(Date.now() - 1000) });
+    await limitSubmitRequest("198.51.100.44");
+    expect((await db.select().from(usageBuckets))[0]?.count).toBe(1);
+    await removeExpiredUsage();
+    expect(await db.select().from(usageBuckets)).toHaveLength(1);
+    await db
+      .update(usageBuckets)
+      .set({ expiresAt: new Date(Date.now() - 1000) });
+    await removeExpiredUsage();
+    expect(await db.select().from(usageBuckets)).toHaveLength(0);
+  });
+
+  test("does not accept more endpoints than the cap under concurrent creation; archive frees capacity", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const { form } = await seedForm({
+      workspaceId: workspace.id,
+      userId: user.id,
+    });
+    const results = await Promise.allSettled(
+      Array.from({ length: 8 }, (_, index) =>
+        createWebhookEndpoint(workspace.slug, form.id, {
+          name: `Endpoint ${index}`,
+          url: "https://receiver.example.org/hook",
+        }),
+      ),
+    );
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(MAX_WEBHOOK_ENDPOINTS);
+    expect(
+      results.filter((result) => result.status === "rejected"),
+    ).toHaveLength(3);
+    const [endpoint] = await db.select().from(webhookEndpoints);
+    if (!endpoint) throw new Error("Missing endpoint");
+    await updateWebhookEndpoint(workspace.slug, form.id, endpoint.id, {
+      enabled: false,
+    });
+    await expect(
+      createWebhookEndpoint(workspace.slug, form.id, {
+        name: "Still full",
+        url: "https://receiver.example.org/hook",
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    await archiveWebhookEndpoint(workspace.slug, form.id, endpoint.id);
+    await expect(
+      createWebhookEndpoint(workspace.slug, form.id, {
+        name: "Replacement",
+        url: "https://receiver.example.org/hook",
+      }),
+    ).resolves.toMatchObject({ enabled: true });
+  });
+
+  test("daily workspace quotas serialize across forms, preserve duplicates, and roll back submission plus outbox", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const first = await seedForm({
+      workspaceId: workspace.id,
+      userId: user.id,
+    });
+    const second = await seedForm({
+      workspaceId: workspace.id,
+      userId: user.id,
+    });
+    if (!first.version || !second.version) throw new Error("Missing versions");
+    await consumeUsage(
+      db,
+      `submissions:${workspace.id}`,
+      MAX_DAILY_SUBMISSIONS,
+      86400,
+      MAX_DAILY_SUBMISSIONS - 1,
+    );
+    const submit = (
+      form: Awaited<ReturnType<typeof seedForm>>,
+      key: string,
+    ) => {
+      if (!form.version) throw new Error("Missing version");
+      return receiveSubmission({
+        slug: form.form.slug,
+        idempotencyKey: key,
+        input: { versionId: form.version.id, values: { name: "Quota" } },
+      });
+    };
+    const results = await Promise.allSettled([
+      submit(first, "first"),
+      submit(second, "second"),
+    ]);
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === "rejected"),
+    ).toHaveLength(1);
+    expect(await db.select().from(submissions)).toHaveLength(1);
+    expect(await db.select().from(outboxEvents)).toHaveLength(1);
+    const acceptedIndex = results.findIndex(
+      (result) => result.status === "fulfilled",
+    );
+    await expect(
+      submit(
+        acceptedIndex === 0 ? first : second,
+        acceptedIndex === 0 ? "first" : "second",
+      ),
+    ).resolves.toMatchObject({ duplicate: true });
+
+    const other = await seedWorkspace();
+    const otherForm = await seedForm({
+      workspaceId: other.workspace.id,
+      userId: other.user.id,
+    });
+    await createWebhookEndpoint(other.workspace.slug, otherForm.form.id, {
+      name: "Hook",
+      url: "https://receiver.example.org",
+    });
+    await consumeUsage(
+      db,
+      `deliveries:${other.workspace.id}`,
+      MAX_DAILY_DELIVERIES,
+      86400,
+      MAX_DAILY_DELIVERIES,
+    );
+    await expect(
+      submit(otherForm, "over-delivery-quota"),
+    ).rejects.toMatchObject({ status: 429 });
+    expect(await db.select().from(submissions)).toHaveLength(1);
+    expect(await db.select().from(outboxEvents)).toHaveLength(1);
+    expect(
+      await db
+        .select()
+        .from(usageBuckets)
+        .where(eq(usageBuckets.key, `submissions:${other.workspace.id}`)),
+    ).toHaveLength(0);
+  });
+
+  test("reports overdue outbox tasks without flagging scheduled future retries", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await db.insert(outboxEvents).values([
+        {
+          aggregateId: crypto.randomUUID(),
+          payload: {},
+          type: "submission.received",
+          availableAt: new Date(Date.now() - 20 * 60000),
+        },
+        {
+          aggregateId: crypto.randomUUID(),
+          payload: {},
+          type: "delivery.requested",
+          availableAt: new Date(Date.now() + 60000),
+        },
+      ]);
+      expect(await inspectPipelineHealth()).toEqual({
+        outbox: 1,
+        deliveries: 0,
+      });
+      expect(warn).toHaveBeenCalledWith(expect.any(String), {
+        outbox: 1,
+        deliveries: 0,
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("keeps idempotent submission and outbox persistence atomic", async () => {

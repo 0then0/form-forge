@@ -10,6 +10,8 @@ import {
   enqueueDueDeliveries,
   enqueueUnprocessedSubmissions,
 } from "@/services/outbox";
+import { removeExpiredUsage } from "@/services/usage";
+import { inspectPipelineHealth } from "@/services/pipeline-health";
 
 export const processSubmission = inngest.createFunction(
   {
@@ -45,11 +47,16 @@ export const drainOutbox = inngest.createFunction(
     triggers: cron("* * * * *"),
   },
   async ({ step }) => {
+    await step.run("expire-usage-buckets", () => removeExpiredUsage());
     await step.run("recover-unprocessed-submissions", () =>
       enqueueUnprocessedSubmissions(),
     );
     await step.run("enqueue-due-deliveries", () => enqueueDueDeliveries());
-    return step.run("dispatch-events", () => dispatchPendingOutbox(50));
+    const sent = await step.run("dispatch-events", () =>
+      dispatchPendingOutbox(50),
+    );
+    await step.run("inspect-pipeline-health", () => inspectPipelineHealth());
+    return sent;
   },
 );
 

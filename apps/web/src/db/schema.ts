@@ -342,6 +342,16 @@ export const outboxEvents = pgTable(
   ],
 );
 
+export const usageBuckets = pgTable(
+  "usage_buckets",
+  {
+    key: varchar("key", { length: 120 }).primaryKey(),
+    count: integer("count").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [index("usage_buckets_expiry_idx").on(table.expiresAt)],
+);
+
 export const auditLogs = pgTable(
   "audit_logs",
   {

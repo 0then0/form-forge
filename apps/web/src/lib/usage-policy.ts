@@ -1,0 +1,4 @@
+export const MAX_WEBHOOK_ENDPOINTS = 5;
+export const MAX_DAILY_SUBMISSIONS = 1_000;
+export const MAX_DAILY_DELIVERIES = 5_000;
+export const MAX_SUBMIT_REQUESTS_PER_MINUTE = 60;

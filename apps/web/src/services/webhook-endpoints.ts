@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, count, desc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 
 import { requireWorkspace } from "@/auth/permissions";
@@ -17,7 +17,8 @@ import {
   generateWebhookSecret,
 } from "@/integration/webhooks/crypto";
 import { validateWebhookUrl } from "@/integration/webhooks/url-policy";
-import { notFoundError } from "@/lib/errors";
+import { AppError, notFoundError } from "@/lib/errors";
+import { MAX_WEBHOOK_ENDPOINTS } from "@/lib/usage-policy";
 import { requireUuidParam } from "@/lib/route-params";
 import { reconcileSubmissionDeliveryStatus } from "./submission-delivery-status";
 
@@ -131,6 +132,32 @@ export const createWebhookEndpoint = async (
   const secret = generateWebhookSecret();
 
   const endpoint = await db.transaction(async (tx) => {
+    // Serialize endpoint creation on its form, including the quota check.
+    const [form] = await tx
+      .select({ status: forms.status })
+      .from(forms)
+      .where(
+        and(eq(forms.id, validFormId), eq(forms.workspaceId, workspace.id)),
+      )
+      .for("update");
+    if (!form || form.status === "archived")
+      throw notFoundError("Form not found");
+    const [existing] = await tx
+      .select({ count: count() })
+      .from(webhookEndpoints)
+      .where(
+        and(
+          eq(webhookEndpoints.formId, validFormId),
+          isNull(webhookEndpoints.archivedAt),
+        ),
+      );
+    if ((existing?.count ?? 0) >= MAX_WEBHOOK_ENDPOINTS) {
+      throw new AppError(
+        "CONFLICT",
+        `A form can have at most ${MAX_WEBHOOK_ENDPOINTS} non-archived webhook endpoints`,
+        409,
+      );
+    }
     const [created] = await tx
       .insert(webhookEndpoints)
       .values({

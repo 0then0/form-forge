@@ -7,6 +7,7 @@ import { AppError } from "@/lib/errors";
 import { trustedForwardedFor } from "@/lib/request-fingerprint";
 import { env } from "@/env";
 import { receiveSubmission } from "@/services/public-forms";
+import { limitSubmitRequest } from "@/services/usage";
 
 const idempotencyKeySchema = z.string().min(1).max(200);
 
@@ -15,6 +16,11 @@ export const POST = async (
   context: { params: Promise<{ slug: string }> },
 ) => {
   try {
+    const forwardedFor = trustedForwardedFor(
+      request.headers,
+      env.TRUST_PROXY === "1",
+    );
+    await limitSubmitRequest(forwardedFor);
     const { slug } = await context.params;
     const idempotencyHeader = request.headers.get("idempotency-key");
     if (!idempotencyHeader) {
@@ -27,10 +33,6 @@ export const POST = async (
     const idempotencyKey = idempotencyKeySchema.parse(idempotencyHeader);
     const input = submissionRequestSchema.parse(
       await parseJsonBody(request, MAX_SUBMISSION_BODY_BYTES),
-    );
-    const forwardedFor = trustedForwardedFor(
-      request.headers,
-      env.TRUST_PROXY === "1",
     );
     const userAgent = request.headers.get("user-agent") ?? undefined;
     const result = await receiveSubmission({

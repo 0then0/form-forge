@@ -1,5 +1,7 @@
 import { withSentryConfig } from "@sentry/nextjs";
 import type { NextConfig } from "next";
+import { PHASE_PRODUCTION_SERVER } from "next/constants";
+import { assertProductionConfig } from "./src/lib/production-config";
 
 const nextConfig: NextConfig = {
   agentRules: false,
@@ -43,7 +45,13 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default withSentryConfig(nextConfig, {
-  silent: true,
-  webpack: { treeshake: { removeDebugLogging: true } },
-});
+export default withSentryConfig(
+  (phase: string) => {
+    if (phase === PHASE_PRODUCTION_SERVER) assertProductionConfig(process.env);
+    return nextConfig;
+  },
+  {
+    silent: true,
+    webpack: { treeshake: { removeDebugLogging: true } },
+  },
+);

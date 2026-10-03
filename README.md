@@ -4,13 +4,12 @@
 
 [![Node.js requirement](https://img.shields.io/badge/Node.js-%3E%3D22.12.0-339933?logo=nodedotjs&logoColor=white)](package.json)
 [![pnpm version](https://img.shields.io/badge/pnpm-10.33.2-F69220?logo=pnpm&logoColor=white)](package.json)
-[![Project status: beta](https://img.shields.io/badge/status-beta-2563eb)](#scope-and-limitations)
 [![CI](https://github.com/0then0/form-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/0then0/form-forge/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/0then0/form-forge)](LICENSE)
 
 Form Forge is a schema-first, headless form platform. Define a form, publish an immutable version, collect responses, and deliver them to signed webhooks with inspectable attempts and retries.
 
-This is a personal project in beta, intended for local use and testing. It is not a drag-and-drop builder or a managed production service. Its focus is explicit contracts, versioned data, reliable background delivery, and a usable administration interface.
+Form Forge is a self-hosted application, not a drag-and-drop builder or a managed service. Its focus is explicit contracts, versioned data, reliable background delivery, and a usable administration interface.
 
 ## Features
 
@@ -178,7 +177,11 @@ API errors use `{ error: { code, message, requestId, fieldErrors? } }`. Validati
 - When a fingerprint is available: 20 submissions per form and fingerprint in a rolling 10-minute window.
 - CSV export: 10,000 submissions and 500 distinct submitted field keys.
 
-Throttling uses the client-provided visitor ID by default; callers can change or omit it, so it is not abuse-proof. With `TRUST_PROXY=1`, the first address in `X-Forwarded-For` takes precedence. Enable this only behind a proxy that overwrites the header.
+Every incoming submit attempt, including malformed requests, consumes a shared PostgreSQL budget before its JSON body is read: 60 requests per IP per fixed UTC minute. Production requires `TRUST_PROXY=1` and the proxy-only `X-Form-Forge-Client-IP` header. The proxy must overwrite it and prevent direct access to the application. Development may use `X-Forwarded-For` with a trusted proxy; without one, requests share a local-development bucket. The visitor ID is metadata, not an identity for this request budget.
+
+Each workspace may accept 1,000 new submissions and reserve 5,000 new webhook deliveries per UTC day. Reservations share the submission transaction; failed transactions and idempotent replays do not consume the daily budget. Quota failures return `429` with `Retry-After` indicating the time until the window resets. Daily delivery reservations count logical deliveries, not HTTP attempts or manual retries.
+
+A form may have five non-archived webhook endpoints, including disabled endpoints. Archive an endpoint to free a slot. Migration `0005` preserves existing data and initializes the current day's usage. If an existing form exceeds the endpoint cap, archive the excess before applying the migration; the migration stops without deleting endpoints.
 
 CSV export preserves the active form and delivery-status filters. It freezes selected records and display metadata before streaming, so new responses and later status changes do not alter an export in progress. Spreadsheet-formula prefixes are escaped.
 
@@ -233,6 +236,8 @@ pnpm format        # Apply formatting
 pnpm knip          # Check unused code and dependencies
 pnpm test          # Run unit tests and configured integration tests
 pnpm test:e2e      # Run the browser lifecycle test
+pnpm test:production # Smoke-test the built application on port 3100
+pnpm start         # Start the built application with validated production config
 pnpm db:generate   # Generate migrations after database schema changes
 pnpm db:migrate    # Apply committed migrations
 pnpm db:studio     # Open Drizzle Studio
@@ -242,7 +247,7 @@ Database commands require `DATABASE_URL` in the shell. Lefthook formats and lint
 
 ### Continuous integration
 
-[GitHub Actions](.github/workflows/ci.yml) runs on pull requests and pushes to `main`. It installs locked dependencies, applies migrations to an empty PostgreSQL database, checks formatting, types, lint, and unused code, and runs unit tests, PostgreSQL integration tests, a production build, and the browser lifecycle test.
+[GitHub Actions](.github/workflows/ci.yml) runs on pull requests and pushes to `main`. It installs locked dependencies, applies migrations to an empty PostgreSQL database, checks formatting, types, lint, and unused code, and runs unit tests, PostgreSQL integration tests, the browser lifecycle test, a production build, and a smoke test using `next start`.
 
 The workflow uses PostgreSQL 16 with separate application, integration, and e2e databases. Application keys are generated for each run; OAuth and Inngest values are test placeholders. No repository secrets or external accounts are required. Browser reports and available screenshots and traces are retained for seven days, including failed attempts that pass on retry. Cancelled runs skip diagnostic uploads.
 
@@ -295,10 +300,41 @@ Stop any application already listening on port 3000 before running e2e. Playwrig
 
 The test covers creating and publishing a form, hosted submission, failure diagnostics, manual retry, successful delivery, and idempotency. Playwright applies migrations and truncates test data before and after the scenario. **Never point it at a database containing data you want to keep.**
 
+To verify the production artifact, use the same disposable database, stop the development server, and run:
+
+```sh
+NEXT_PUBLIC_APP_URL=https://forms.example.org pnpm build
+pnpm test:production
+```
+
+The production smoke test supplies isolated runtime credentials, starts `next start` on port 3100, checks rendering, atomic submission persistence, idempotency and request throttling, and confirms that internal e2e controls are unavailable. It does not call OAuth or cloud Inngest. Its reports are stored under `apps/web/playwright-report/production` and `apps/web/test-results/production`, separately from the lifecycle test. It also migrates and truncates the test database.
+
+## Deployment and operations
+
+Use [the production environment template](apps/web/.env.production.example) as a checklist, not as deployable credentials. Supply real secrets through your deployment's secret store. `pnpm start` rejects local Inngest mode, known credential placeholders, non-HTTPS application URLs, mismatched application URLs, disabled proxy trust, and enabled test controls. Build-time CI placeholders remain supported.
+
+Set `APP_URL`, `NEXTAUTH_URL`, and `NEXT_PUBLIC_APP_URL` to the same public HTTPS URL. `NEXT_PUBLIC_APP_URL` must be set **before building**; changing a public environment variable requires a rebuild. Configure the GitHub OAuth callback for that hostname and real Inngest credentials with `INNGEST_DEV=0`. Keep `AUTH_SECRET`, `FINGERPRINT_SECRET`, and the 32-byte base64 `WEBHOOK_ENCRYPTION_KEY` stable across deployments. Losing or changing the encryption key makes existing endpoint secrets unreadable.
+
+The application must be reachable only through a trusted HTTPS ingress. Do not expose its origin port publicly. The ingress must discard any incoming `X-Form-Forge-Client-IP` and replace it with the actual client IP, not append to it. For an Nginx ingress directly facing clients, the relevant setting is `proxy_set_header X-Form-Forge-Client-IP $remote_addr;`. If another trusted proxy precedes Nginx, configure its trusted-address chain before using `$remote_addr`. Also enforce request-body sizes, read timeouts, connection limits, and request limits at ingress; application quotas do not replace network-level protection.
+
+Before updating an existing installation, back up the database and secrets, archive any endpoints exceeding the five-per-form cap, stop application writes and workers, then run `pnpm db:migrate`. Migration `0005` is additive and initializes today's reservations from existing submissions and their endpoint snapshots. Build with the target public URL, start with `pnpm start`, register `/api/inngest`, and confirm that all three functions, including the minute-based recovery job, are active before resuming traffic. Keep migrations out of per-instance startup. Roll back application code only to a version compatible with the applied schema; do not delete migration history or drop tables to roll back.
+
+Use PostgreSQL backups appropriate to your hosting environment. For a logical backup and an isolated restore rehearsal:
+
+```sh
+pg_dump --format=custom --file=form-forge.dump "$DATABASE_URL"
+createdb form_forge_restore
+pg_restore --dbname=form_forge_restore --no-owner form-forge.dump
+```
+
+Run restore rehearsals on an isolated PostgreSQL instance, never over the live database. Restrict and encrypt backup storage because dumps contain personal data. Restore the corresponding secret-store keys too, and verify published schemas, submission counts, and endpoint-secret decryption before relying on a backup. Schedule backups and test restores, rather than treating a successful dump as proof of recovery.
+
+The recovery job logs a warning and sends a Sentry warning when outbox tasks or deliveries are overdue by more than 15 minutes. Scheduled future retries are not flagged. Configure `SENTRY_DSN` and an alert for this warning and unhandled server errors; diagnostics contain counts rather than submission values. Monitor failed or missing Inngest cron runs as well: a stopped scheduler cannot report its own backlog. Start by measuring queue age and throughput; the current dispatcher sends up to 50 outbox events per minute.
+
 ## Scope and limitations
 
-Beta covers the complete form lifecycle and its automated regression checks, with CI configured for each pull request and push to `main`. It is a local testing milestone, not a production-readiness guarantee; interfaces may still change.
+Automated checks cover the form lifecycle, PostgreSQL invariants, and a built application smoke test. They do not certify an installation's networking, live OAuth, cloud Inngest, backup recovery, or capacity. Verify those deployment-specific controls before accepting public traffic.
 
 The application uses GitHub sign-in and iframe embedding. It does not include a visual page builder, custom domains, API-key authentication, email invitations, or an embed SDK. Workspace packages are internal and are not published to npm.
 
-For an internet-facing deployment, configure real OAuth callback URLs and application URLs, Inngest credentials, HTTPS, stable secrets, database backups, and your proxy's trusted-header behavior. The local Docker credentials and Inngest `local` values are not deployment configuration. Automated tests substitute external services; they do not certify a live deployment.
+The local Docker credentials and Inngest `local` values are not deployment configuration. Workspace limits bound new logical work, but manual retries still consume resources and stored history grows over time; monitor usage and provision storage for your retention needs.
