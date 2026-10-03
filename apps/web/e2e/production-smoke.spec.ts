@@ -95,13 +95,30 @@ test("serves the built application, persists submissions, and disables test cont
   );
   expect(persisted.rows[0]).toEqual({ submissions: 1, events: 1 });
 
+  const invalidHeaders = {
+    "Idempotency-Key": "invalid-smoke-submit",
+    "X-Form-Forge-Client-IP": "198.51.100.21",
+  };
+  expect(
+    (
+      await request.post(`/api/forms/${slug}/submit`, {
+        headers: invalidHeaders,
+        data: "invalid JSON",
+      })
+    ).status(),
+  ).toBe(400);
+  // The disposable database contains only this scenario's request buckets.
+  // Keep the burst in one window even if it crosses a real UTC minute.
+  await pool.query(
+    "update usage_buckets set count=0, expires_at=now() + interval '1 hour' where key like 'submit:%'",
+  );
   const statuses = await Promise.all(
     Array.from({ length: 64 }, async () =>
       (
         await request.post(`/api/forms/${slug}/submit`, {
           headers: {
+            ...invalidHeaders,
             "Idempotency-Key": crypto.randomUUID(),
-            "X-Form-Forge-Client-IP": "198.51.100.21",
           },
           data: "invalid JSON",
         })

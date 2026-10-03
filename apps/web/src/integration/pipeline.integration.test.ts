@@ -280,6 +280,11 @@ integration("submission and delivery pipeline", () => {
   });
 
   test("enforces request budgets atomically across concurrent callers and resets expired windows", async () => {
+    await limitSubmitRequest("198.51.100.44");
+    // Isolate concurrent counting from the real UTC minute boundary.
+    await db
+      .update(usageBuckets)
+      .set({ count: 0, expiresAt: sql`now() + interval '1 hour'` });
     const results = await Promise.allSettled(
       Array.from({ length: 64 }, () => limitSubmitRequest("198.51.100.44")),
     );
@@ -293,14 +298,19 @@ integration("submission and delivery pipeline", () => {
     expect(bucket?.count).toBe(61);
     await db
       .update(usageBuckets)
-      .set({ expiresAt: new Date(Date.now() - 1000) });
+      .set({ expiresAt: sql`now() - interval '1 second'` });
     await limitSubmitRequest("198.51.100.44");
     expect((await db.select().from(usageBuckets))[0]?.count).toBe(1);
+    // Cleanup has a separate assertion; do not let the newly reset minute
+    // expire between the reset assertion and the cleanup call.
+    await db
+      .update(usageBuckets)
+      .set({ expiresAt: sql`now() + interval '1 hour'` });
     await removeExpiredUsage();
     expect(await db.select().from(usageBuckets)).toHaveLength(1);
     await db
       .update(usageBuckets)
-      .set({ expiresAt: new Date(Date.now() - 1000) });
+      .set({ expiresAt: sql`now() - interval '1 second'` });
     await removeExpiredUsage();
     expect(await db.select().from(usageBuckets)).toHaveLength(0);
   });

@@ -81,8 +81,18 @@ test("creates, publishes, submits, fails, retries, and succeeds", async ({
   await page.goto(`/app/${workspaceSlug}/forms`);
   await page.getByRole("button", { name: "New form" }).first().click();
   await page.getByLabel("Name").fill(name);
+  const createdResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith(`/api/admin/workspaces/${workspaceSlug}/forms`),
+  );
   await page.getByRole("button", { name: "Create form" }).click();
-  await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+  const createdResponse = await createdResponsePromise;
+  expect(createdResponse.status()).toBe(201);
+  // The development server compiles the editor route on its first visit.
+  await expect(page.getByRole("heading", { level: 1, name })).toBeVisible({
+    timeout: 15_000,
+  });
   const formId = page.url().split("/forms/")[1];
   if (!formId) throw new Error("Editor URL did not contain the form ID");
 
