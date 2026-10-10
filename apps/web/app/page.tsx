@@ -53,7 +53,7 @@ export default async function MarketingPage() {
         <p className="text-sm font-medium text-blue-700">
           Headless form platform
         </p>
-        <h1 className="mt-4 text-5xl font-semibold tracking-tight text-slate-950 sm:text-6xl">
+        <h1 className="mt-4 text-4xl font-semibold tracking-tight text-slate-950 sm:text-6xl">
           Forms with an inspectable delivery pipeline.
         </h1>
         <p className="mx-auto mt-6 max-w-2xl text-lg leading-8 text-slate-600">
