@@ -71,6 +71,7 @@ const ErrorSummary = ({ errors }: { errors: string[] }) =>
       <p className="font-medium">Please correct the following:</p>
       <ul className="mt-1 list-disc pl-5">
         {errors.map((error, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: Repeated error messages need distinct keys and these rows have no state.
           <li key={`${error}-${index}`}>{error}</li>
         ))}
       </ul>

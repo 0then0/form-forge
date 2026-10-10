@@ -48,6 +48,7 @@ export const Label = ({
   className,
   ...props
 }: React.LabelHTMLAttributes<HTMLLabelElement>) => (
+  // biome-ignore lint/a11y/noLabelWithoutControl: Consumers supply label content and htmlFor through props.
   <label
     className={cn("text-sm font-medium text-slate-900", className)}
     {...props}

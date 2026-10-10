@@ -1,10 +1,10 @@
 pre-commit:
   commands:
-    prettier:
-      glob: "*.{js,jsx,mjs,cjs,ts,tsx,json,css,md,yml,yaml}"
-      run: pnpm exec prettier --write {staged_files}
+    biome:
+      glob: "*.{js,jsx,mjs,cjs,ts,tsx,json,css}"
+      run: pnpm exec biome check --write --no-errors-on-unmatched {staged_files}
       stage_fixed: true
-    eslint:
-      glob: "*.{js,jsx,mjs,cjs,ts,tsx}"
-      run: pnpm exec eslint --fix {staged_files}
+    prettier:
+      glob: "*.{md,yml,yaml}"
+      run: pnpm exec prettier --write {staged_files}
       stage_fixed: true

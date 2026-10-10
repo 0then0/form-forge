@@ -2,7 +2,20 @@ packages:
   - apps/*
   - packages/*
 
-onlyBuiltDependencies:
-  - "@sentry/cli"
-  - esbuild
-  - lefthook
+strictPeerDependencies: true
+autoInstallPeers: false
+
+allowBuilds:
+  "@sentry/cli": true
+  esbuild: true
+  lefthook: true
+  msw: false
+  protobufjs: false
+
+# Keep the direct versions from the dependency upgrade; all other releases
+# remain subject to pnpm's default 24-hour minimum release age.
+minimumReleaseAgeExclude:
+  - "@types/node@24.19.2"
+  - inngest@4.23.0
+  - lucide-react@1.55.0
+  - prettier@3.9.10

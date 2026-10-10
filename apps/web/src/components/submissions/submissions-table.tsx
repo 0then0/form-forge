@@ -4,9 +4,8 @@ import { Badge, Button, EmptyState, Select, Skeleton } from "@form-forge/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import {
   createColumnHelper,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
+  tableFeatures,
+  useTable,
 } from "@tanstack/react-table";
 import { Download } from "lucide-react";
 import Link from "next/link";
@@ -37,7 +36,8 @@ const statusTone = {
   succeeded: "success",
 } as const;
 
-const columnHelper = createColumnHelper<SubmissionRow>();
+const features = tableFeatures({});
+const columnHelper = createColumnHelper<typeof features, SubmissionRow>();
 
 export const SubmissionsTable = ({
   forms,
@@ -66,7 +66,10 @@ export const SubmissionsTable = ({
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     queryKey: ["submissions", workspaceSlug, formId, status],
   });
-  const rows = query.data?.pages.flatMap((page) => page.data) ?? [];
+  const rows = useMemo(
+    () => query.data?.pages.flatMap((page) => page.data) ?? [],
+    [query.data],
+  );
   const exportParams = new URLSearchParams();
   if (formId) exportParams.set("formId", formId);
   if (status) exportParams.set("deliveryStatus", status);
@@ -74,56 +77,54 @@ export const SubmissionsTable = ({
     exportParams.size > 0 ? `?${exportParams}` : ""
   }`;
   const columns = useMemo(
-    () => [
-      columnHelper.accessor("formName", {
-        cell: (cell) => (
-          <Link
-            href={`/app/${workspaceSlug}/submissions/${cell.row.original.id}`}
-            className="font-medium text-slate-950 hover:underline"
-          >
-            {cell.getValue()}
-          </Link>
-        ),
-        header: "Form",
-      }),
-      columnHelper.accessor("versionNumber", {
-        cell: (cell) => `v${cell.getValue()}`,
-        header: "Version",
-      }),
-      columnHelper.accessor("normalizedValues", {
-        cell: (cell) => {
-          const preview = Object.entries(cell.getValue())
-            .slice(0, 2)
-            .map(([key, value]) => `${key}: ${String(value)}`)
-            .join(" · ");
-          return (
-            <span className="line-clamp-1 max-w-md text-slate-600">
-              {preview || "No values"}
-            </span>
-          );
-        },
-        header: "Values",
-      }),
-      columnHelper.accessor("deliveryStatus", {
-        cell: (cell) => (
-          <Badge tone={statusTone[cell.getValue()]}>{cell.getValue()}</Badge>
-        ),
-        header: "Delivery",
-      }),
-      columnHelper.accessor("createdAt", {
-        cell: (cell) => <LocalDateTime value={cell.getValue()} />,
-        header: "Received",
-      }),
-    ],
+    () =>
+      columnHelper.columns([
+        columnHelper.accessor("formName", {
+          cell: (cell) => (
+            <Link
+              href={`/app/${workspaceSlug}/submissions/${cell.row.original.id}`}
+              className="font-medium text-slate-950 hover:underline"
+            >
+              {cell.getValue()}
+            </Link>
+          ),
+          header: "Form",
+        }),
+        columnHelper.accessor("versionNumber", {
+          cell: (cell) => `v${cell.getValue()}`,
+          header: "Version",
+        }),
+        columnHelper.accessor("normalizedValues", {
+          cell: (cell) => {
+            const preview = Object.entries(cell.getValue())
+              .slice(0, 2)
+              .map(([key, value]) => `${key}: ${String(value)}`)
+              .join(" · ");
+            return (
+              <span className="line-clamp-1 max-w-md text-slate-600">
+                {preview || "No values"}
+              </span>
+            );
+          },
+          header: "Values",
+        }),
+        columnHelper.accessor("deliveryStatus", {
+          cell: (cell) => (
+            <Badge tone={statusTone[cell.getValue()]}>{cell.getValue()}</Badge>
+          ),
+          header: "Delivery",
+        }),
+        columnHelper.accessor("createdAt", {
+          cell: (cell) => <LocalDateTime value={cell.getValue()} />,
+          header: "Received",
+        }),
+      ]),
     [workspaceSlug],
   );
-  // TanStack Table returns intentionally unstable functions, so this component
-  // must remain outside React Compiler memoization.
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const table = useReactTable({
+  const table = useTable({
+    features,
     columns,
     data: rows,
-    getCoreRowModel: getCoreRowModel(),
   });
 
   return (
@@ -164,6 +165,7 @@ export const SubmissionsTable = ({
       {query.isPending ? (
         <div className="space-y-2">
           {Array.from({ length: 5 }).map((_, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: Placeholder rows have a fixed order and no state.
             <Skeleton key={index} className="h-14" />
           ))}
         </div>
@@ -187,12 +189,9 @@ export const SubmissionsTable = ({
                 <tr key={headerGroup.id}>
                   {headerGroup.headers.map((header) => (
                     <th key={header.id} className="px-4 py-3 font-medium">
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(
-                            header.column.columnDef.header,
-                            header.getContext(),
-                          )}
+                      {header.isPlaceholder ? null : (
+                        <table.FlexRender header={header} />
+                      )}
                     </th>
                   ))}
                 </tr>
@@ -201,12 +200,9 @@ export const SubmissionsTable = ({
             <tbody className="divide-y divide-slate-100">
               {table.getRowModel().rows.map((row) => (
                 <tr key={row.id} className="hover:bg-slate-50">
-                  {row.getVisibleCells().map((cell) => (
+                  {row.getAllCells().map((cell) => (
                     <td key={cell.id} className="px-4 py-3 whitespace-nowrap">
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext(),
-                      )}
+                      <table.FlexRender cell={cell} />
                     </td>
                   ))}
                 </tr>

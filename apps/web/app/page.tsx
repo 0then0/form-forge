@@ -2,6 +2,7 @@ import { Button } from "@form-forge/ui";
 import { ArrowRight, Braces, RefreshCcw, Webhook } from "lucide-react";
 import Link from "next/link";
 
+import { getSession } from "@/auth/session";
 import { BrandMark } from "@/components/brand-mark";
 import { ThemeToggle } from "@/components/theme-toggle";
 
@@ -24,10 +25,14 @@ const features = [
   },
 ];
 
-export default function MarketingPage() {
+export default async function MarketingPage() {
+  const session = await getSession();
+  const isSignedIn = Boolean(session?.user?.id);
+  const workspaceHref = isSignedIn ? "/app" : "/login";
+
   return (
     <main>
-      <nav className="mx-auto flex max-w-6xl items-center justify-between gap-2 px-4 py-4 sm:px-6 sm:py-6">
+      <nav className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-4 py-4 sm:px-6 sm:py-6">
         <Link
           href="/"
           className="flex shrink-0 items-center gap-2 font-semibold tracking-tight whitespace-nowrap text-slate-950"
@@ -35,10 +40,12 @@ export default function MarketingPage() {
           <BrandMark />
           <span>Form Forge</span>
         </Link>
-        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+        <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
           <ThemeToggle />
           <Button asChild variant="secondary" size="sm">
-            <Link href="/login">Sign in</Link>
+            <Link href={workspaceHref}>
+              {isSignedIn ? "Open workspace" : "Sign in"}
+            </Link>
           </Button>
         </div>
       </nav>
@@ -54,7 +61,7 @@ export default function MarketingPage() {
           and understand exactly what happened to every webhook.
         </p>
         <Button asChild className="mt-8">
-          <Link href="/login">
+          <Link href={workspaceHref}>
             Open the workspace <ArrowRight className="size-4" />
           </Link>
         </Button>

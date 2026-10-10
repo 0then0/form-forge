@@ -27,7 +27,7 @@ export const patternLooksSafe = (pattern: string): boolean => {
 
   const body = pattern.slice(1, -1);
   let quantifierCount = 0;
-  for (let index = 0; index < body.length;) {
+  for (let index = 0; index < body.length; ) {
     const token = body[index];
     if (token === "\\") {
       const escaped = body[index + 1];

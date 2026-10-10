@@ -13,7 +13,10 @@ export type FieldType = (typeof FIELD_TYPES)[number];
 export type LayoutWidth = "full" | "half";
 
 export type VisibilityOperator =
-  "equals" | "notEquals" | "contains" | "isEmpty";
+  | "equals"
+  | "notEquals"
+  | "contains"
+  | "isEmpty";
 
 export type VisibilityRule = {
   fieldKey: string;

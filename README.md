@@ -2,8 +2,8 @@
 
 # Form Forge
 
-[![Node.js requirement](https://img.shields.io/badge/Node.js-%3E%3D22.12.0-339933?logo=nodedotjs&logoColor=white)](package.json)
-[![pnpm version](https://img.shields.io/badge/pnpm-10.33.2-F69220?logo=pnpm&logoColor=white)](package.json)
+[![Node.js requirement](https://img.shields.io/badge/Node.js-22.22.2%2B%20%2F%2024.15.0%2B%20%2F%2026%2B-339933?logo=nodedotjs&logoColor=white)](package.json)
+[![pnpm version](https://img.shields.io/badge/pnpm-12.10.1-F69220?logo=pnpm&logoColor=white)](package.json)
 [![CI](https://github.com/0then0/form-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/0then0/form-forge/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/0then0/form-forge)](LICENSE)
 
@@ -27,8 +27,8 @@ Form Forge is a self-hosted application, not a drag-and-drop builder or a manage
 
 ### Requirements
 
-- Node.js 22.12 or newer.
-- pnpm 10.33.2, as pinned in `package.json`.
+- Node.js 22 (22.22.2 or newer), 24 (24.15.0 or newer), or 26 and newer, as specified in `package.json`.
+- pnpm 12.10.1, as pinned in `package.json`.
 - PostgreSQL. The Docker example below uses PostgreSQL 16.
 - A GitHub OAuth application for signing in.
 
@@ -230,9 +230,9 @@ Drafts are validated JSONB snapshots. Publishing creates an immutable `form_vers
 pnpm dev           # Start the development application
 pnpm build         # Build the application and check workspace packages
 pnpm typecheck     # Check TypeScript across the workspace
-pnpm lint          # Run ESLint
-pnpm format:check  # Check formatting
-pnpm format        # Apply formatting
+pnpm lint          # Run Biome lint checks
+pnpm format:check  # Check Biome and Markdown/YAML formatting
+pnpm format        # Format code with Biome and Markdown/YAML with Prettier
 pnpm knip          # Check unused code and dependencies
 pnpm test          # Run unit tests and configured integration tests
 pnpm test:e2e      # Run the browser lifecycle test
@@ -243,7 +243,7 @@ pnpm db:migrate    # Apply committed migrations
 pnpm db:studio     # Open Drizzle Studio
 ```
 
-Database commands require `DATABASE_URL` in the shell. Lefthook formats and lints staged source files before commits; it does not run tests.
+Database commands require `DATABASE_URL` in the shell. Biome formats and lints JavaScript, TypeScript, JSON, and CSS. Prettier formats Markdown and YAML. TypeScript 7.0.2 checks types through the native compiler CLI, including during `next build`. Biome enables Promise checks, but these rules are experimental and do not guarantee identical coverage to typescript-eslint. Lefthook checks staged code with Biome and formats staged Markdown and YAML with Prettier; it does not run tests.
 
 ### Continuous integration
 

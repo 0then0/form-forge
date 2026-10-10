@@ -9,7 +9,8 @@ export const SchemaPreview = ({
   result,
 }: {
   result:
-    { success: true; data: FormSchemaV1 } | { success: false; error: ZodError };
+    | { success: true; data: FormSchemaV1 }
+    | { success: false; error: ZodError };
 }) => (
   <Card>
     <div className="border-b border-slate-100 px-5 py-4">

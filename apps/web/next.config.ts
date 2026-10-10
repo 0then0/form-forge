@@ -1,4 +1,4 @@
-import { withSentryConfig } from "@sentry/nextjs";
+import { withSentryConfig } from "@sentry/nextjs/config";
 import type { NextConfig } from "next";
 import { PHASE_PRODUCTION_SERVER } from "next/constants";
 import { assertProductionConfig } from "./src/lib/production-config";

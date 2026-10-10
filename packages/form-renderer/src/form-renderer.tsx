@@ -170,7 +170,7 @@ const RenderedField = ({
     id: field.id,
   };
 
-  let control;
+  let control: React.ReactNode;
   switch (field.type) {
     case "longText":
       control = (

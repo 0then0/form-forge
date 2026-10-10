@@ -61,6 +61,54 @@ test.afterAll(async () => {
   await pool.end();
 });
 
+test("keeps guest and signed-in home navigation within the viewport", async ({
+  page,
+}) => {
+  for (const signedIn of [false, true]) {
+    if (signedIn) {
+      await page.context().addCookies([
+        {
+          domain: "localhost",
+          httpOnly: true,
+          name: "next-auth.session-token",
+          path: "/",
+          sameSite: "Lax",
+          secure: false,
+          value: sessionToken,
+        },
+      ]);
+    }
+
+    for (const width of [320, 375, 390, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/");
+      await page.evaluate(() => document.fonts.ready);
+
+      const navigation = page.getByRole("navigation");
+      const workspaceLink = navigation.getByRole("link", {
+        name: signedIn ? "Open workspace" : "Sign in",
+        exact: true,
+      });
+      await expect(workspaceLink).toBeVisible();
+      await expect(workspaceLink).toHaveAttribute(
+        "href",
+        signedIn ? "/app" : "/login",
+      );
+      await expect(
+        page.getByRole("link", { name: "Open the workspace", exact: true }),
+      ).toHaveAttribute("href", signedIn ? "/app" : "/login");
+
+      const bounds = await workspaceLink.boundingBox();
+      if (!bounds) throw new Error("Workspace link must have visible bounds");
+      expect(bounds.x).toBeGreaterThanOrEqual(0);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth),
+      ).toBeLessThanOrEqual(width);
+    }
+  }
+});
+
 test("creates, publishes, submits, fails, retries, and succeeds", async ({
   page,
 }) => {

@@ -19,8 +19,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
-        {/* Static bootstrap prevents a theme flash before React hydrates. */}
         <script
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: Static trusted bootstrap prevents a theme flash before hydration.
           dangerouslySetInnerHTML={{ __html: themeInitializer }}
           id="theme-initializer"
         />

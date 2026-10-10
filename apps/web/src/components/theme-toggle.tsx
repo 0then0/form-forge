@@ -81,6 +81,7 @@ export const ThemeToggle = ({ className }: { className?: string }) => {
   };
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: This named group contains theme buttons, not form fields.
     <div
       aria-label="Color theme"
       className={cn(
