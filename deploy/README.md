@@ -69,12 +69,23 @@ tar -xzf form-forge-0.1.0-rc.1.tar.gz
 cd form-forge-0.1.0-rc.1
 ```
 
+Published artifacts are available on the
+[GitHub Releases page](https://github.com/0then0/form-forge/releases). Verify all
+three files from the same release before extracting the archive.
+
 For maintainers, generate this artifact from a clean, committed checkout with
 `python3 deploy/package.py`. It does not commit, create a tag, push, publish an
 image, or create a GitHub Release. Re-running it against identical source produces
 the same checksums. The packager refuses dirty checkouts and includes only tracked regular files. The application and
 workspace npm packages keep their existing internal `0.0.0` versions; the
 deployment release version is `deploy/VERSION`.
+
+To publish a reviewed revision, push a tag named `v<deploy/VERSION>`. The
+[release workflow](../.github/workflows/release.yml) checks that the tag matches
+that version, packages the committed source, verifies checksums, uploads the
+three artifacts to a draft GitHub Release, then publishes it. Versions containing
+a hyphen, such as `0.1.0-rc.1`, are published as prereleases. The workflow uses
+GitHub's scoped job token and requires no registry or personal access credentials.
 
 ### Configure once
 

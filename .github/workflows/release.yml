@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Verify version and prepare release notes
+        run: |
+          test "$GITHUB_REF_NAME" = "v$(cat deploy/VERSION)"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          source = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/blob/{os.environ['GITHUB_SHA']}/deploy"
+          notes = Path('deploy/RELEASE_NOTES.md').read_text()
+          for name in ['README.md', 'VERIFICATION.md']:
+              notes = notes.replace(f']({name})', f']({source}/{name})')
+          Path(os.environ['RUNNER_TEMP'], 'release-notes.md').write_text(notes)
+          PY
+
+      - name: Package committed source
+        run: |
+          python3 -B deploy/package.py
+          cd release-artifacts
+          sha256sum --check SHA256SUMS
+
+      - name: Upload assets and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_args=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            release_args+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            "release-artifacts/form-forge-$(cat deploy/VERSION).tar.gz" \
+            release-artifacts/SOURCE.json release-artifacts/SHA256SUMS \
+            --verify-tag --draft "${release_args[@]}" \
+            --title "Form Forge $GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+          gh release edit "$GITHUB_REF_NAME" --draft=false
