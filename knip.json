@@ -3,12 +3,15 @@
   "workspaces": {
     "apps/web": {
       "drizzle": false,
+      "ignoreUnresolved": ["../server.js"],
       "entry": [
         "app/**/*.{ts,tsx}",
+        "scripts/*.mjs",
         "drizzle.config.ts",
         "src/inngest/functions.ts"
       ],
-      "project": ["**/*.{ts,tsx,css}"]
+      "project": ["**/*.{ts,tsx,css}"],
+      "ignoreBinaries": ["openssl"]
     },
     "packages/*": {
       "project": ["src/**/*.{ts,tsx}"]

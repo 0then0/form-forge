@@ -1,0 +1,42 @@
+# Test fixture overlay ONLY. Never include in a public installation.
+services:
+  migrate:
+    image: ${ACCEPTANCE_PROJECT:?Run acceptance/run.py}-migrate:fixture
+
+  web:
+    image: ${ACCEPTANCE_PROJECT:?Run acceptance/run.py}-web:fixture
+    environment:
+      NODE_EXTRA_CA_CERTS: /fixture-tls/fullchain.pem
+    volumes:
+      - ${ACCEPTANCE_DIR:?Run acceptance/run.py}/receiver-tls:/fixture-tls:ro
+    extra_hosts:
+      - "receiver.form-forge.invalid:192.0.3.10"
+    networks: [default, receiver-fixture]
+
+  ingress:
+    volumes:
+      - ${ACCEPTANCE_DIR}/app-tls:/run/tls:ro
+
+  receiver:
+    image: node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+    command: ["node", "/fixture/receiver.mjs"]
+    environment:
+      RECEIVER_SECRET: ${RECEIVER_SECRET:?Run acceptance/run.py}
+    volumes:
+      - ../apps/web/scripts/acceptance-receiver.mjs:/fixture/receiver.mjs:ro
+      - ${ACCEPTANCE_DIR}/receiver-tls:/tls:ro
+      - ${ACCEPTANCE_DIR}/evidence:/evidence
+    networks:
+      receiver-fixture:
+        ipv4_address: 192.0.3.10
+    init: true
+    stop_grace_period: 10s
+
+networks:
+  receiver-fixture:
+    internal: true
+    ipam:
+      config:
+        # Public-shaped address accepted by the unchanged target policy, assigned
+        # ONLY inside an internal network. No packets go to the public IP owner.
+        - subnet: 192.0.3.0/24

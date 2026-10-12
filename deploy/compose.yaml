@@ -1,0 +1,147 @@
+name: form-forge
+
+x-app-environment: &app-environment
+  DATABASE_URL: postgresql://form_forge:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/form_forge
+  AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET}
+  FINGERPRINT_SECRET: ${FINGERPRINT_SECRET:?Set FINGERPRINT_SECRET}
+  WEBHOOK_ENCRYPTION_KEY: ${WEBHOOK_ENCRYPTION_KEY:?Set WEBHOOK_ENCRYPTION_KEY}
+  AUTH_GITHUB_ID: ${AUTH_GITHUB_ID:?Set AUTH_GITHUB_ID}
+  AUTH_GITHUB_SECRET: ${AUTH_GITHUB_SECRET:?Set AUTH_GITHUB_SECRET}
+  APP_URL: https://${PUBLIC_HOST:?Set PUBLIC_HOST}
+  NEXTAUTH_URL: https://${PUBLIC_HOST}
+  NEXT_PUBLIC_APP_URL: https://${PUBLIC_HOST}
+  INNGEST_DEV: "0"
+  INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:?Set INNGEST_EVENT_KEY}
+  INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:?Set INNGEST_SIGNING_KEY}
+  INNGEST_BASE_URL: http://inngest:8288
+  INNGEST_SERVE_ORIGIN: http://web:3000
+  TRUST_PROXY: "1"
+  SENTRY_DSN: ""
+  NEXT_PUBLIC_SENTRY_DSN: ""
+
+services:
+  postgres:
+    image: postgres:16.14-bookworm@sha256:64154d0babcb1741988719e703419af0382b19953706149f9872fbd0f438efa8
+    environment:
+      POSTGRES_DB: form_forge
+      POSTGRES_USER: form_forge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - application-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "form_forge", "-d", "form_forge"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+  redis:
+    image: redis:7.4.8-bookworm@sha256:3e0669e42d4fe421c9dea0ba5fbc04d336b80b4f32a6c7d25bee3a1d089288a1
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+    command:
+      - /bin/sh
+      - -ec
+      - exec docker-entrypoint.sh redis-server --appendonly yes --appendfsync always --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"
+    volumes:
+      - scheduler-queue:/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+  migrate:
+    image: form-forge-migrate:0.1.0-rc.1
+    build:
+      context: ..
+      target: migrate
+    environment:
+      DATABASE_URL: postgresql://form_forge:${POSTGRES_PASSWORD}@postgres:5432/form_forge
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["operations"]
+    init: true
+
+  web:
+    image: form-forge:0.1.0-rc.1
+    build:
+      context: ..
+      target: runtime
+      args:
+        NEXT_PUBLIC_APP_URL: https://${PUBLIC_HOST}
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/readiness.mjs"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  inngest:
+    image: inngest/inngest:v1.46.0@sha256:9c4a2413bdbfa31a94ff54c32ae2dcc6613dbee84bc76db6cf6644d19e357e3e
+    command:
+      - inngest
+      - start
+      - --host
+      - "0.0.0.0"
+      - --sdk-url
+      - http://web:3000/api/inngest
+      - --poll-interval
+      - "30"
+      - --sqlite-dir
+      - /var/lib/inngest
+    environment:
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
+      INNGEST_REDIS_URI: redis://:${REDIS_PASSWORD}@redis:6379/0
+    volumes:
+      - scheduler-history:/var/lib/inngest
+    depends_on:
+      web:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "inngest", "alpha", "doctor", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+  ingress:
+    image: nginx:1.30.5-trixie@sha256:9bf97bd7714f5e24c1ccd545ecb9eb5435cb6d109c97cebb15e7e455e0239edb
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST}
+      NGINX_ENVSUBST_FILTER: PUBLIC_HOST
+    ports:
+      - "${HTTPS_BIND:-0.0.0.0}:${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./tls:/run/tls:ro
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  application-data:
+  scheduler-history:
+  scheduler-queue:

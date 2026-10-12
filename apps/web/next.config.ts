@@ -1,11 +1,14 @@
 import { withSentryConfig } from "@sentry/nextjs/config";
 import type { NextConfig } from "next";
 import { PHASE_PRODUCTION_SERVER } from "next/constants";
+import { fileURLToPath } from "node:url";
 import { assertProductionConfig } from "./src/lib/production-config";
 
 const nextConfig: NextConfig = {
   agentRules: false,
   typedRoutes: true,
+  output: "standalone",
+  outputFileTracingRoot: fileURLToPath(new URL("../../", import.meta.url)),
   serverExternalPackages: ["pg"],
   transpilePackages: [
     "@form-forge/form-renderer",

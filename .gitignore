@@ -45,3 +45,12 @@ apps/web/drizzle/meta/_journal.json.tmp
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Self-hosted installation keys, certificates, backups and generated releases
+/deploy/tls/
+/release-artifacts/
+/deploy/evidence/
+
+**/installation.env
+**/backups/
+**/__pycache__/

@@ -20,7 +20,8 @@
     "db:generate": "pnpm --filter @form-forge/web db:generate",
     "db:migrate": "pnpm --filter @form-forge/web db:migrate",
     "db:studio": "pnpm --filter @form-forge/web db:studio",
-    "prepare": "lefthook install"
+    "prepare": "lefthook install",
+    "test:deployment": "python3 -B -m unittest discover -s deploy/tests -p 'test_*.py'"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

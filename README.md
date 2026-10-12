@@ -31,6 +31,8 @@ Form Forge is a self-hosted application, not a drag-and-drop builder or a manage
 - pnpm 12.10.1, as pinned in `package.json`.
 - PostgreSQL. The Docker example below uses PostgreSQL 16.
 - A GitHub OAuth application for signing in.
+- OpenSSL for the HTTPS receiver tests. Deployment utilities also require Python 3.9 or newer
+  and Docker; see [deployment verification](deploy/VERIFICATION.md).
 
 Run the following commands from the repository root unless stated otherwise.
 
@@ -235,6 +237,7 @@ pnpm format:check  # Check Biome and Markdown/YAML formatting
 pnpm format        # Format code with Biome and Markdown/YAML with Prettier
 pnpm knip          # Check unused code and dependencies
 pnpm test          # Run unit tests and configured integration tests
+pnpm test:deployment # Test packaging, backup boundaries and cleanup reporting
 pnpm test:e2e      # Run the browser lifecycle test
 pnpm test:production # Smoke-test the built application on port 3100
 pnpm start         # Start the built application with validated production config
@@ -247,7 +250,7 @@ Database commands require `DATABASE_URL` in the shell. Biome formats and lints J
 
 ### Continuous integration
 
-[GitHub Actions](.github/workflows/ci.yml) runs on pull requests and pushes to `main`. It installs locked dependencies, applies migrations to an empty PostgreSQL database, checks formatting, types, lint, and unused code, and runs unit tests, PostgreSQL integration tests, the browser lifecycle test, a production build, and a smoke test using `next start`.
+[GitHub Actions](.github/workflows/ci.yml) runs on pull requests and pushes to `main`. It installs locked dependencies, applies migrations to an empty PostgreSQL database, checks formatting, types, lint, and unused code, and runs unit tests, PostgreSQL integration tests, deployment utility regressions, the browser lifecycle test, a production build, and a smoke test using `next start`.
 
 The workflow uses PostgreSQL 16 with separate application, integration, and e2e databases. Application keys are generated for each run; OAuth and Inngest values are test placeholders. No repository secrets or external accounts are required. Browser reports and available screenshots and traces are retained for seven days, including failed attempts that pass on retry. Cancelled runs skip diagnostic uploads.
 
@@ -311,6 +314,13 @@ The production smoke test supplies isolated runtime credentials, starts `next st
 
 ## Deployment and operations
 
+For the first reproducible single-host release candidate, use the
+[Docker Compose installation, upgrade and recovery guide](deploy/README.md).
+It builds from source for your public hostname and runs a real self-hosted
+Inngest with persistent scheduler storage. See the
+[verification and limitations](deploy/VERIFICATION.md); a successful build or
+health check alone does not establish delivery or production readiness.
+
 Use [the production environment template](apps/web/.env.production.example) as a checklist, not as deployable credentials. Supply real secrets through your deployment's secret store. `pnpm start` rejects local Inngest mode, known credential placeholders, non-HTTPS application URLs, mismatched application URLs, disabled proxy trust, and enabled test controls. Build-time CI placeholders remain supported.
 
 Set `APP_URL`, `NEXTAUTH_URL`, and `NEXT_PUBLIC_APP_URL` to the same public HTTPS URL. `NEXT_PUBLIC_APP_URL` must be set **before building**; changing a public environment variable requires a rebuild. Configure the GitHub OAuth callback for that hostname and real Inngest credentials with `INNGEST_DEV=0`. Keep `AUTH_SECRET`, `FINGERPRINT_SECRET`, and the 32-byte base64 `WEBHOOK_ENCRYPTION_KEY` stable across deployments. Losing or changing the encryption key makes existing endpoint secrets unreadable.
@@ -319,7 +329,7 @@ The application must be reachable only through a trusted HTTPS ingress. Do not e
 
 Before updating an existing installation, back up the database and secrets, archive any endpoints exceeding the five-per-form cap, stop application writes and workers, then run `pnpm db:migrate`. Migration `0005` is additive and initializes today's reservations from existing submissions and their endpoint snapshots. Build with the target public URL, start with `pnpm start`, register `/api/inngest`, and confirm that all three functions, including the minute-based recovery job, are active before resuming traffic. Keep migrations out of per-instance startup. Roll back application code only to a version compatible with the applied schema; do not delete migration history or drop tables to roll back.
 
-Use PostgreSQL backups appropriate to your hosting environment. For a logical backup and an isolated restore rehearsal:
+For Docker Compose installations, use the [three-store backup procedure](deploy/README.md#backup-and-isolated-restore), including scheduler storage and keys. For other hosting environments, use PostgreSQL backups appropriate to the installation. The following commands cover only the application database:
 
 ```sh
 pg_dump --format=custom --file=form-forge.dump "$DATABASE_URL"
