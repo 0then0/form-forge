@@ -1,4 +1,4 @@
-# Form Forge 0.1.0-rc.1 self-hosting
+# Form Forge 0.1.0-rc.2 self-hosting
 
 This is one single-host Docker Compose deployment, built from source for the
 installation's public hostname. See [release notes](RELEASE_NOTES.md) for the supported scope and
@@ -58,15 +58,15 @@ for the Docker build.
 
 ### Install from the source artifact
 
-The artifact contract is `form-forge-0.1.0-rc.1.tar.gz`, `SOURCE.json`, and
+The artifact contract is `form-forge-0.1.0-rc.2.tar.gz`, `SOURCE.json`, and
 `SHA256SUMS`. `SOURCE.json` records the commit ID and the SHA-256 hash of each
 source file. Checksums verify integrity, not publisher identity. Verify and extract
 the artifact supplied by your release maintainer:
 
 ```sh
 shasum -a 256 -c SHA256SUMS
-tar -xzf form-forge-0.1.0-rc.1.tar.gz
-cd form-forge-0.1.0-rc.1
+tar -xzf form-forge-0.1.0-rc.2.tar.gz
+cd form-forge-0.1.0-rc.2
 ```
 
 Published artifacts are available on the
@@ -84,7 +84,7 @@ To publish a reviewed revision, push a tag named `v<deploy/VERSION>`. The
 [release workflow](../.github/workflows/release.yml) checks that the tag matches
 that version, packages the committed source, verifies checksums, uploads the
 three artifacts to a draft GitHub Release, then publishes it. Versions containing
-a hyphen, such as `0.1.0-rc.1`, are published as prereleases. The workflow uses
+a hyphen, such as `0.1.0-rc.2`, are published as prereleases. The workflow uses
 GitHub's scoped job token and requires no registry or personal access credentials.
 
 ### Configure once
