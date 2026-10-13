@@ -5,12 +5,47 @@ import { trustedForwardedFor } from "./request-fingerprint";
 describe("trustedForwardedFor", () => {
   it("requires the proxy-only production header, not a framework-generated forwarding header", () => {
     vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VERCEL", "");
     try {
       const headers = new Headers({ "x-forwarded-for": "198.51.100.8" });
       expect(trustedForwardedFor(headers, true)).toBeUndefined();
       headers.set("x-form-forge-client-ip", "198.51.100.9");
       expect(trustedForwardedFor(headers, true)).toBe("198.51.100.9");
       expect(trustedForwardedFor(headers, false)).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it("uses only the platform client IP on Vercel, ignoring spoofed ingress headers", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VERCEL", "1");
+    try {
+      const headers = new Headers({
+        "x-form-forge-client-ip": "198.51.100.9",
+        "x-forwarded-for": "198.51.100.10",
+      });
+      expect(trustedForwardedFor(headers, true)).toBeUndefined();
+      headers.set("x-vercel-forwarded-for", "2001:db8::1");
+      expect(trustedForwardedFor(headers, true)).toBe("2001:db8::1");
+      expect(trustedForwardedFor(headers, false)).toBeUndefined();
+      headers.set("x-vercel-forwarded-for", "not-an-ip");
+      expect(trustedForwardedFor(headers, true)).toBeUndefined();
+      headers.set("x-vercel-forwarded-for", " ");
+      expect(trustedForwardedFor(headers, true)).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it("does not trust Vercel headers on a self-hosted production server", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VERCEL", "");
+    try {
+      expect(
+        trustedForwardedFor(
+          new Headers({ "x-vercel-forwarded-for": "198.51.100.8" }),
+          true,
+        ),
+      ).toBeUndefined();
     } finally {
       vi.unstubAllEnvs();
     }

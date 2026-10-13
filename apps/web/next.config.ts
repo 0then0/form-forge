@@ -1,6 +1,9 @@
 import { withSentryConfig } from "@sentry/nextjs/config";
 import type { NextConfig } from "next";
-import { PHASE_PRODUCTION_SERVER } from "next/constants";
+import {
+  PHASE_PRODUCTION_BUILD,
+  PHASE_PRODUCTION_SERVER,
+} from "next/constants";
 import { fileURLToPath } from "node:url";
 import { assertProductionConfig } from "./src/lib/production-config";
 
@@ -50,7 +53,12 @@ const nextConfig: NextConfig = {
 
 export default withSentryConfig(
   (phase: string) => {
-    if (phase === PHASE_PRODUCTION_SERVER) assertProductionConfig(process.env);
+    if (
+      phase === PHASE_PRODUCTION_SERVER ||
+      (phase === PHASE_PRODUCTION_BUILD && process.env.VERCEL === "1")
+    ) {
+      assertProductionConfig(process.env);
+    }
     return nextConfig;
   },
   {

@@ -179,7 +179,7 @@ API errors use `{ error: { code, message, requestId, fieldErrors? } }`. Validati
 - When a fingerprint is available: 20 submissions per form and fingerprint in a rolling 10-minute window.
 - CSV export: 10,000 submissions and 500 distinct submitted field keys.
 
-Every incoming submit attempt, including malformed requests, consumes a shared PostgreSQL budget before its JSON body is read: 60 requests per IP per fixed UTC minute. Production requires `TRUST_PROXY=1` and the proxy-only `X-Form-Forge-Client-IP` header. The proxy must overwrite it and prevent direct access to the application. Development may use `X-Forwarded-For` with a trusted proxy; without one, requests share a local-development bucket. The visitor ID is metadata, not an identity for this request budget.
+Every incoming submit attempt, including malformed requests, consumes a shared PostgreSQL budget before its JSON body is read: 60 requests per IP per fixed UTC minute. Production requires `TRUST_PROXY=1`. On Vercel (`VERCEL=1`), the application uses the platform's `x-vercel-forwarded-for` header. Self-hosted production requires the proxy-only `X-Form-Forge-Client-IP` header; the proxy must overwrite it and prevent direct access to the application. Development may use `X-Forwarded-For` with a trusted proxy; without one, requests share a local-development bucket. The visitor ID is metadata, not an identity for this request budget.
 
 Each workspace may accept 1,000 new submissions and reserve 5,000 new webhook deliveries per UTC day. Reservations share the submission transaction; failed transactions and idempotent replays do not consume the daily budget. Quota failures return `429` with `Retry-After` indicating the time until the window resets. Daily delivery reservations count logical deliveries, not HTTP attempts or manual retries.
 
@@ -314,6 +314,10 @@ The production smoke test supplies isolated runtime credentials, starts `next st
 
 ## Deployment and operations
 
+For Vercel hosting with Neon PostgreSQL and Inngest Cloud, follow the
+[Vercel deployment guide](deploy/VERCEL.md). The repository includes the Vercel
+build configuration and platform-specific trusted client IP handling.
+
 For the first reproducible single-host release candidate, use the
 [Docker Compose installation, upgrade and recovery guide](deploy/README.md).
 It builds from source for your public hostname and runs a real self-hosted
@@ -325,7 +329,7 @@ Use [the production environment template](apps/web/.env.production.example) as a
 
 Set `APP_URL`, `NEXTAUTH_URL`, and `NEXT_PUBLIC_APP_URL` to the same public HTTPS URL. `NEXT_PUBLIC_APP_URL` must be set **before building**; changing a public environment variable requires a rebuild. Configure the GitHub OAuth callback for that hostname and real Inngest credentials with `INNGEST_DEV=0`. Keep `AUTH_SECRET`, `FINGERPRINT_SECRET`, and the 32-byte base64 `WEBHOOK_ENCRYPTION_KEY` stable across deployments. Losing or changing the encryption key makes existing endpoint secrets unreadable.
 
-The application must be reachable only through a trusted HTTPS ingress. Do not expose its origin port publicly. The ingress must discard any incoming `X-Form-Forge-Client-IP` and replace it with the actual client IP, not append to it. For an Nginx ingress directly facing clients, the relevant setting is `proxy_set_header X-Form-Forge-Client-IP $remote_addr;`. If another trusted proxy precedes Nginx, configure its trusted-address chain before using `$remote_addr`. Also enforce request-body sizes, read timeouts, connection limits, and request limits at ingress; application quotas do not replace network-level protection.
+For self-hosted deployments, the application must be reachable only through a trusted HTTPS ingress. Do not expose its origin port publicly. The ingress must discard any incoming `X-Form-Forge-Client-IP` and replace it with the actual client IP, not append to it. For an Nginx ingress directly facing clients, the relevant setting is `proxy_set_header X-Form-Forge-Client-IP $remote_addr;`. If another trusted proxy precedes Nginx, configure its trusted-address chain before using `$remote_addr`. Also enforce request-body sizes, read timeouts, connection limits, and request limits at ingress; application quotas do not replace network-level protection. On Vercel, the platform provides the trusted ingress and its own client IP header; see the Vercel guide for configuration and platform limits.
 
 Before updating an existing installation, back up the database and secrets, archive any endpoints exceeding the five-per-form cap, stop application writes and workers, then run `pnpm db:migrate`. Migration `0005` is additive and initializes today's reservations from existing submissions and their endpoint snapshots. Build with the target public URL, start with `pnpm start`, register `/api/inngest`, and confirm that all three functions, including the minute-based recovery job, are active before resuming traffic. Keep migrations out of per-instance startup. Roll back application code only to a version compatible with the applied schema; do not delete migration history or drop tables to roll back.
 

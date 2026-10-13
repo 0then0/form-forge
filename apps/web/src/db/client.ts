@@ -4,7 +4,13 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
 import { env } from "@/env";
+import { assertProductionConfig } from "@/lib/production-config";
 import * as schema from "./schema";
+
+// Vercel functions do not execute next start or the standalone startup wrapper.
+if (process.env.NODE_ENV === "production" && process.env.VERCEL === "1") {
+  assertProductionConfig(process.env);
+}
 
 const globalForDb = globalThis as unknown as { pool?: Pool };
 
