@@ -255,12 +255,16 @@ For a controlled maintenance snapshot, with no other database writers:
 sh deploy/backup.sh /absolute/new/form-forge-backup
 ```
 
-The script stops ingress, web, Inngest and Redis, creates a PostgreSQL custom dump,
+The script stops ingress, web, Inngest and Redis, verifies they are stopped, and creates a PostgreSQL custom dump,
 archives the entire stopped SQLite directory (including WAL files) and entire
 Redis data directory (including multipart AOF), and copies the installation
-environment, Compose version and TLS files. The destination must be outside the project directory, including when reached
+environment, release provenance, Compose files, Nginx template and TLS files. Every copied file is covered by the checksum manifest. An `INCOMPLETE` marker remains until dump/archive validation and checksum verification finish; a failed backup must not be restored. The destination must be outside the project directory, including when reached
 through a symlink. The script refuses to overwrite a directory and leaves
-services stopped for inspection. Encrypt the entire backup at rest and
+services stopped for inspection. For an installation with a custom project or
+Compose overlay, pass the same standard Compose selectors to the script, for example
+`COMPOSE_PROJECT_NAME=my-installation COMPOSE_FILE=deploy/compose.yaml:deploy/local.yaml sh deploy/backup.sh /absolute/new/backup`.
+The files must live inside the installation; preserve the backed-up overlays and
+review installation-specific addresses and mounts for the destination. Encrypt the entire backup at rest and
 move it to restricted storage. Dumps and scheduler history can contain personal
 data; never attach them to evidence or release artifacts. Resume with `dc up -d --wait`, then repeat registration/cron checks.
 
@@ -268,9 +272,16 @@ Rehearse restore on a separate Docker project, never over the source. Extract th
 **same** source release to a new directory, securely copy `installation.env` to
 `deploy/.env` and backup TLS to `deploy/tls`. Bind `HTTPS_BIND=127.0.0.1` and set an
 unused `HTTPS_PORT` (for example 19443) so it cannot accept public traffic. Use a
-separate function:
+separate function. From the new source root, verify the **entire** backup before
+creating a destination. The strengthened checksum/provenance set is produced by
+this revised script; original rc.1 backups omit these metadata and TLS coverage
+and cannot pass this stricter verification unchanged. `backup_manifest.py verify` refuses an incomplete set,
+uncovered/missing files, checksum mismatches and unsafe scheduler archives.
+`shasum` alone cannot establish that required files were not omitted.
 
 ```sh
+python3 deploy/backup_manifest.py verify /backup
+(cd /backup && shasum -a 256 -c SHA256SUMS)
 restore_dc() { docker compose --env-file deploy/.env -p form-forge-restore -f deploy/compose.yaml "$@"; }
 restore_dc config --quiet
 restore_dc up -d --wait postgres
@@ -279,20 +290,45 @@ restore_dc run --rm --no-deps -T --entrypoint sh inngest -c 'cd /var/lib/inngest
 restore_dc run --rm --no-deps -T --entrypoint sh redis -c 'cd /data && tar -xzf -' < /backup/scheduler-queue.tar.gz
 ```
 
-These commands assume all destination volumes are new and empty and all writers
-are stopped. Verify backup `SHA256SUMS` first. Match container ownership and image
+These commands require all three destination volumes to be new and empty and all
+writers to be stopped. Refuse a pre-existing project/volume; inspect the resolved
+Compose configuration and container mounts to rule out source volume names, bind
+mounts, external application/scheduler stores and source service addresses. Stop
+the source after backup but retain it until the drill finishes. The disposable
+runner verifies this isolation; it shares only the controlled receiver network.
+The keys come from `installation.env`; keep `VERSION`, `SOURCE.json`, `BACKUP.json`,
+`compose.yaml`, `nginx.conf.template` and `configuration/` with the backup. Match
+its source hashes/version with the original source release. For custom overlays,
+copy the recorded `configuration/` files and adjust only destination project,
+paths and local ingress binding. No migration or fixture SQL repairs scheduler
+registration during a same-release restore. Match container ownership and image
 versions; do not import a live Redis directory or only SQLite's `main.db` while
 its writers are running. Build for the preserved hostname and use local DNS
-resolution to reach the loopback HTTPS port. Published schema hashes, submission
-counts and endpoint-secret decryption must match the backup before workers start.
+resolution to reach the loopback HTTPS port. Before workers start, compare published schema IDs/hashes, individual submission
+and endpoint identities, outbox states/due times, logical delivery IDs/retry budgets
+and attempt history, and verify every endpoint secret decrypts with the preserved
+key. A one-off verification process may read the restored database without starting
+workers. Refuse decryption failure before allowing delivery processing. Inspect the
+restored scheduler directories/history before starting Inngest; application outbox
+recovery is not evidence that scheduler archives were restored.
+
+Then run `restore_dc up -d --wait`, verify the same registered function identities,
+new completed minute cron runs, and real HTTPS delivery under restored logical IDs.
+A due retry may already be overdue: application cron dispatches the stored outbox
+and repairs due deliveries, rather than preserving a future Inngest sleep for each
+application retry.
 Do not resume a restore against real receiver endpoints without an agreed
 redelivery window; use an owner-controlled isolated receiver for drills.
 
-The automated test restores the application database and keys to a new PostgreSQL
-destination while retaining the corresponding stopped scheduler volumes. It checks
-schema hashes, counts, decryption and subsequent pending-outbox delivery. It does
-**not** yet verify restoring the scheduler archives themselves. Rehearse complete
-three-store restore separately using the procedure above.
+The automated test runs this complete cold restore using `deploy/backup.sh` in a
+disposable installation and a second Compose project. One snapshot contains pending
+outbox, a persisted 503 with pending retry, and completed delivery history. It checks
+new empty stores, full restored scheduler-directory file hashes, SQLite identities
+and history, surviving Redis values before workers, application invariants and
+secret decryption. Corrupted archive and wrong-key copies must fail before workers.
+It then requires real cron recovery and raw-byte HTTPS HMAC validation and observes
+completed logical work across two additional completed recovery ticks. This finite
+observation is not a guarantee of no HTTP replay forever.
 
 Application outbox recovery also repairs incomplete processing: pending/failed
 events retry; sent submissions without deliveries can be requeued after five
@@ -315,13 +351,13 @@ guarantee is claimed.
 On a disposable Docker host with Python 3.9 or newer, OpenSSL and curl:
 
 ```sh
-python3 deploy/acceptance/run.py --output deploy/evidence/local.json
+python3 deploy/acceptance/run.py --cold-restore-only --output deploy/evidence/local.json
 ```
 
 The runner creates a random project and new volumes, builds from locked source,
 generates temporary credentials/certificates, migrates an empty database, exercises
 real signed Inngest calls and real HTTPS transport, and cleans only its resources
-in `finally`. Port 18443 and the fixture subnet must be free. Fixture identities,
+in `finally`. Loopback ports 18443 and 19443 and the fixture subnet must be free. Fixture identities,
 schemas and endpoints are inserted directly into the disposable database; this is
 not a live OAuth test. No production authentication bypass is introduced.
 

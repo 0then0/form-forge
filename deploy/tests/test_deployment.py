@@ -176,7 +176,7 @@ class DockerContextTests(unittest.TestCase):
                     self.assertIn("context/public.txt", names)
                     self.assertFalse(
                         any(
-                            name.endswith("installation.env") or name.endswith("/.env")
+                            name.endswith(("installation.env", "/.env"))
                             for name in names
                         )
                     )

@@ -2,8 +2,12 @@
 
 Do this on a disposable installation, with your own public domain, GitHub OAuth
 application and controlled public HTTPS receiver. Do not use shared/production
-resources or someone else's endpoint. The [automated runner](run.py) completes
-independent checks first; public DNS, TLS and OAuth require these installation-specific checks.
+resources or someone else's endpoint. The [automated runner](run.py) performs the complete maintenance cold restore,
+including pending outbox/retry and completed delivery, on two independent Compose
+projects. Run `python3 deploy/acceptance/run.py --cold-restore-only --output deploy/evidence/local.json`
+from the source root. It requires free loopback ports 18443 and 19443 and the fixture
+subnet. No live installation is required for this automated drill;
+public DNS, TLS and OAuth require these installation-specific checks.
 
 ## Public TLS and OAuth
 
@@ -77,7 +81,9 @@ using elapsed sleeps as proof:
 4. With a pending retry, use `dc restart inngest`. Verify stored work progresses
    with the same SQLite/Redis volumes. This is graceful scheduler restart, not
    power-loss recovery.
-5. Follow the full backup/isolated restore commands in the guide. Check all three
+5. Follow the full backup/isolated restore commands in the guide, verifying the whole
+   backup before creating a new project with three empty stores. Stop and retain
+   the source; inspect destination volume names/mounts and service addresses. Check all three
    store archives and keys, published schema hashes, counts, endpoint-secret
    decryption and pending-delivery behavior in the destination. Preserve the
    source. Coordinate real receiver effects before replaying a restored backup.

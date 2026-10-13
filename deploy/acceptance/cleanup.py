@@ -1,15 +1,18 @@
 """Cleanup and reporting for one disposable acceptance project."""
 
 import json
+import subprocess
 
 
-def cleanup_resources(run, dc, project, restore_container, restore_volume):
+def cleanup_resources(run, dc, project, restore_container=None, restore_volume=None):
     errors = []
     remaining = {}
     try:
-        run(["docker", "rm", "-f", restore_container], check=False)
-        run(["docker", "volume", "rm", restore_volume], check=False)
-        dc("down", "--volumes", "--remove-orphans", check=False)
+        if restore_container:
+            run(["docker", "rm", "-f", restore_container], check=False)
+        if restore_volume:
+            run(["docker", "volume", "rm", restore_volume], check=False)
+        dc("down", "--volumes", "--remove-orphans")
         for kind, command in {
             "containers": ["docker", "ps", "-aq"],
             "volumes": ["docker", "volume", "ls", "-q"],
@@ -21,11 +24,11 @@ def cleanup_resources(run, dc, project, restore_container, restore_volume):
         # The restore resources were created outside Compose and have no labels.
         containers = run(["docker", "ps", "-a", "--format", "{{.Names}}"]).splitlines()
         volumes = run(["docker", "volume", "ls", "-q"]).splitlines()
-        if restore_container in containers:
+        if restore_container and restore_container in containers:
             remaining["containers"].append(restore_container)
-        if restore_volume in volumes:
+        if restore_volume and restore_volume in volumes:
             remaining["volumes"].append(restore_volume)
-    except Exception as error:
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         errors.append(str(error))
     return {
         "remaining": remaining,
@@ -41,7 +44,20 @@ def save_report(report, output, cleanup):
         report["status"] = "failed"
         report.setdefault("error", "Disposable environment cleanup failed")
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2) + "\n")
+    try:
+        serialized = json.dumps(report, indent=2)
+    except (TypeError, ValueError):
+        # Preserve an explicit failed report even if diagnostic evidence cannot
+        # be serialized. Never leave an older passed report at the same path.
+        fallback = {
+            "status": "failed",
+            "error": report.get("error", "Evidence serialization failed"),
+            "reportFailure": "Evidence serialization failed",
+            "cleanup": cleanup,
+        }
+        output.write_text(json.dumps(fallback, indent=2) + "\n")
+        raise
+    output.write_text(serialized + "\n")
     # Preserve an earlier scenario exception; fail a previously successful run.
     if previously_passed and not cleanup["passed"]:
         raise SystemExit(1)

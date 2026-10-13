@@ -10,36 +10,78 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
 from pathlib import Path
 
 from cleanup import cleanup_resources, save_report
+from cold_restore import (
+    DECRYPT,
+    INVARIANTS,
+    REDIS_CONTENT,
+    archive_files,
+    claim_new_destination,
+    compare_redis,
+    inspect_isolation,
+    redis_metadata,
+    sqlite_metadata,
+)
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from backup_manifest import verify as verify_backup
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--output", type=Path, default=ROOT / "evidence/local.json")
+parser.add_argument(
+    "--cold-restore-only",
+    action="store_true",
+    help="Run the full three-store cold restore; skip extra retained-store/lost-ACK drills",
+)
 args = parser.parse_args()
 project = "ff-acceptance-" + uuid.uuid4().hex[:10]
 host = "forms.acceptance.invalid"
 port = 18443
 report = {
     "project": project,
+    "release": (ROOT / "VERSION").read_text().strip(),
     "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     "scenarios": {},
+    "coldRestoreOnly": args.cold_restore_only,
+    "status": "failed",  # Only all scenarios plus cleanup can produce passed.
 }
 
 
-def run(command, *, input=None, env=None, check=True):
+# Setup failures precede Docker creation; replace any older report immediately.
+save_report(report, args.output, {"passed": True, "phase": "before Docker creation"})
+
+sensitive_values = set()
+
+
+def redact(message):
+    for value in sensitive_values:
+        message = message.replace(value, "[redacted]")
+    return message
+
+
+def run(command, *, input=None, env=None, check=True, timeout=180):
     result = subprocess.run(
-        command, input=input, text=True, capture_output=True, env=env, check=False
+        command,
+        input=input,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+        timeout=timeout,
     )
     if check and result.returncode:
         # Commands never include owner secrets; do not echo runtime environment.
         raise RuntimeError(
-            f"Command failed: {' '.join(command)}\n{result.stderr[-4000:]}"
+            redact(f"Command failed: {' '.join(command)}\n{result.stderr[-4000:]}")
         )
     return result.stdout.strip()
 
@@ -67,7 +109,52 @@ def wait(label, probe, timeout=360):
 
 with tempfile.TemporaryDirectory(prefix=project + "-") as temporary:
     directory = Path(temporary)
-    (directory / "evidence").mkdir()
+    # Freeze one source revision; both installations get independent files.
+    release = directory / "release"
+    release.mkdir()
+    provenance = ROOT.parent / "SOURCE.json"
+    if provenance.exists():
+        source_record = json.loads(provenance.read_text())
+        names = list(source_record["files"])
+    else:
+        names = run(["git", "-C", str(ROOT.parent), "ls-files"]).splitlines()
+        # New acceptance utilities are intentionally uncommitted during review.
+        names = sorted(
+            set(names)
+            | {
+                "deploy/backup_manifest.py",
+                "deploy/acceptance/cold_restore.py",
+                "deploy/tests/test_cold_restore.py",
+            }
+        )
+        source_record = {
+            "commit": run(["git", "-C", str(ROOT.parent), "rev-parse", "HEAD"]),
+            "workingTree": run(
+                ["git", "-C", str(ROOT.parent), "status", "--porcelain"]
+            ),
+        }
+    for name in names:
+        target = release / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT.parent / name, target)
+    if provenance.exists():
+        for name in names:
+            if (
+                hashlib.sha256((release / name).read_bytes()).hexdigest()
+                != source_record["files"][name]
+            ):
+                raise RuntimeError("Source release checksum mismatch: " + name)
+    source_record["version"] = (ROOT / "VERSION").read_text().strip()
+    source_record["files"] = {
+        n: hashlib.sha256((release / n).read_bytes()).hexdigest() for n in names
+    }
+    (release / "SOURCE.json").write_text(json.dumps(source_record, indent=2) + "\n")
+    installation = directory / "source"
+    destination_installation = directory / "destination"
+    shutil.copytree(release, installation)
+    shutil.copytree(release, destination_installation)
+    (installation / "deploy/evidence").mkdir()
+    directory.chmod(0o700)
     keys = {
         "PUBLIC_HOST": host,
         "ACCEPTANCE_PROJECT": project,
@@ -81,11 +168,16 @@ with tempfile.TemporaryDirectory(prefix=project + "-") as temporary:
         "INNGEST_EVENT_KEY": secrets.token_hex(32),
         "INNGEST_SIGNING_KEY": secrets.token_hex(32),
         "RECEIVER_SECRET": secrets.token_urlsafe(32),
-        "ACCEPTANCE_DIR": str(directory),
+        "ACCEPTANCE_DIR": str(installation / "deploy"),
         "HTTPS_BIND": "127.0.0.1",
         "HTTPS_PORT": str(port),
     }
-    env_file = directory / ".env"
+    sensitive_values.update(
+        value
+        for key, value in keys.items()
+        if any(token in key for token in ("SECRET", "PASSWORD", "KEY"))
+    )
+    env_file = installation / "deploy/.env"
     env_file.write_text(
         "\n".join(f"{key}={value}" for key, value in keys.items()) + "\n"
     )
@@ -94,7 +186,7 @@ with tempfile.TemporaryDirectory(prefix=project + "-") as temporary:
         ("app-tls", host),
         ("receiver-tls", "receiver.form-forge.invalid"),
     ]:
-        tls = directory / folder
+        tls = installation / "deploy" / folder
         tls.mkdir()
         run(
             [
@@ -118,7 +210,14 @@ with tempfile.TemporaryDirectory(prefix=project + "-") as temporary:
                 "basicConstraints=critical,CA:TRUE",
             ]
         )
-    environment = {**os.environ, "BUILDX_CONFIG": str(directory / "buildx")}
+    # backup.sh uses the published deploy/tls layout as well as the fixture CA.
+    shutil.copytree(installation / "deploy/app-tls", installation / "deploy/tls")
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("COMPOSE_") and key not in keys
+    }
+    environment["BUILDX_CONFIG"] = str(directory / "buildx")
     compose = [
         "docker",
         "compose",
@@ -127,13 +226,19 @@ with tempfile.TemporaryDirectory(prefix=project + "-") as temporary:
         "-p",
         project,
         "-f",
-        str(ROOT / "compose.yaml"),
+        str(installation / "deploy/compose.yaml"),
         "-f",
-        str(ROOT / "acceptance/compose.yaml"),
+        str(installation / "deploy/acceptance/compose.yaml"),
     ]
 
     def dc(*command, input=None, check=True):
-        return run([*compose, *command], input=input, env=environment, check=check)
+        return run(
+            [*compose, *command],
+            input=input,
+            env=environment,
+            check=check,
+            timeout=1800 if command[0] == "build" else 180,
+        )
 
     def sql(query):
         return json.loads(
@@ -208,7 +313,7 @@ with tempfile.TemporaryDirectory(prefix=project + "-") as temporary:
                 "--noproxy",
                 "*",
                 "--cacert",
-                str(directory / "app-tls/fullchain.pem"),
+                str(installation / "deploy/app-tls/fullchain.pem"),
                 "--resolve",
                 f"{host}:{port}:127.0.0.1",
                 "-X",
@@ -265,6 +370,7 @@ with tempfile.TemporaryDirectory(prefix=project + "-") as temporary:
             crypto_code,
             input=keys["RECEIVER_SECRET"],
         )
+        sensitive_values.add(encrypted)
         execute(f"""begin;
 insert into users(id,email) values ({quote(user)},{quote(slug + "@form-forge.invalid")});
 insert into workspaces(id,name,slug) values ({quote(workspace)},'Acceptance',{quote(slug)});
@@ -319,8 +425,67 @@ commit;""")
             "observedPending": initial,
         }
 
-    restore_container = project + "-restore"
-    restore_volume = project + "-restore-data"
+    destination_project = project + "-destination"
+    destination_compose = None
+    destination_owned = False
+
+    def transfer(command, path, write=False):
+        with path.open("wb" if write else "rb") as stream:
+            result = subprocess.run(
+                command,
+                env=environment,
+                check=False,
+                stdout=stream if write else subprocess.PIPE,
+                stdin=None if write else stream,
+                stderr=subprocess.PIPE,
+                timeout=120,
+            )
+        if result.returncode:
+            raise RuntimeError(
+                "Backup/restore store command failed: " + result.stderr.decode()[-2000:]
+            )
+
+    def inspect_project(name):
+        ids = run(
+            [
+                "docker",
+                "ps",
+                "-aq",
+                "--filter",
+                "label=com.docker.compose.project=" + name,
+            ]
+        ).splitlines()
+        return json.loads(run(["docker", "inspect", *ids])) if ids else []
+
+    scheduler_run_ids = set()
+
+    def redis_state():
+        raw = dc(
+            "exec",
+            "-T",
+            "redis",
+            "sh",
+            "-c",
+            'REDISCLI_AUTH="$REDIS_PASSWORD" exec redis-cli --json "$@"',
+            "diagnostic",
+            "EVAL",
+            REDIS_CONTENT,
+            "0",
+        )
+        return redis_metadata(raw, scheduler_run_ids)
+
+    def cron_runs():
+        result = graphql(
+            "{ stream(query:{limit:100,includeInternalEvents:true}) { id trigger type createdAt runs { id status startedAt finishedAt function { slug } } } }"
+        )
+        return [
+            r
+            for item in result["stream"]
+            for r in item.get("runs") or []
+            if r.get("function", {}).get("slug") == "form-forge-drain-outbox"
+            and r["status"] == "COMPLETED"
+        ]
+
     try:
         provenance = ROOT.parent / "SOURCE.json"
         report["commit"] = (
@@ -328,27 +493,9 @@ commit;""")
             if provenance.exists()
             else run(["git", "-C", str(ROOT.parent), "rev-parse", "HEAD"])
         )
-        report["sourceHashes"] = {
-            str(path.relative_to(ROOT.parent)): hashlib.sha256(
-                path.read_bytes()
-            ).hexdigest()
-            for path in [
-                ROOT.parent / "Dockerfile",
-                ROOT.parent / ".dockerignore",
-                ROOT / "acceptance/cleanup.py",
-                ROOT / "compose.yaml",
-                ROOT / "nginx.conf.template",
-                ROOT / "acceptance/run.py",
-                ROOT / "acceptance/compose.yaml",
-                ROOT.parent / "apps/web/scripts/start.mjs",
-                ROOT.parent / "apps/web/scripts/readiness.mjs",
-                ROOT.parent / "apps/web/scripts/acceptance-receiver.mjs",
-            ]
-        }
-        report["workingTree"] = (
-            run(["git", "-C", str(ROOT.parent), "status", "--porcelain"])
-            if not provenance.exists()
-            else "packaged committed revision"
+        report["sourceHashes"] = source_record["files"]
+        report["workingTree"] = source_record.get(
+            "workingTree", "packaged committed revision"
         )
         report["docker"] = run(["docker", "version", "--format", "{{.Server.Version}}"])
         report["compose"] = run(["docker", "compose", "version", "--short"])
@@ -466,92 +613,96 @@ commit;""")
         wait("outage recovery by minute cron", lambda: completed(submission))
         save_scenario("A_scheduler_outage", submission, started, atomic)
 
-        # B + D: a persisted retry survives graceful restart of real Inngest.
-        slug, version = fixture("/retry")
-        submission, started = submit(slug, version, "retry-and-scheduler-restart")
-        pending = wait(
-            "503 persisted and retry scheduled",
-            lambda: next(
-                (
-                    r
-                    for r in state(submission)
-                    if r["status"] == "pending"
-                    and r["attempt_count"] == 1
-                    and r["next_attempt_at"]
+        if not args.cold_restore_only:
+            # B + D: a persisted retry survives graceful restart of real Inngest.
+            slug, version = fixture("/retry")
+            submission, started = submit(slug, version, "retry-and-scheduler-restart")
+            pending = wait(
+                "503 persisted and retry scheduled",
+                lambda: next(
+                    (
+                        r
+                        for r in state(submission)
+                        if r["status"] == "pending"
+                        and r["attempt_count"] == 1
+                        and r["next_attempt_at"]
+                    ),
+                    None,
                 ),
-                None,
-            ),
-        )
-        dc("restart", "inngest")
-        wait("retry after graceful scheduler restart", lambda: completed(submission))
-        save_scenario("B_D_retry_scheduler_restart", submission, started, pending)
-        assert [
-            r["http_status"]
-            for r in report["scenarios"]["B_D_retry_scheduler_restart"]["attempts"]
-        ] == [503, 200]
+            )
+            dc("restart", "inngest")
+            wait(
+                "retry after graceful scheduler restart", lambda: completed(submission)
+            )
+            save_scenario("B_D_retry_scheduler_restart", submission, started, pending)
+            assert [
+                r["http_status"]
+                for r in report["scenarios"]["B_D_retry_scheduler_restart"]["attempts"]
+            ] == [503, 200]
 
-        # C: receiver durably records the first request but withholds its ACK.
-        # Kill only this disposable web worker after observing HTTP acceptance.
-        slug, version = fixture("/hold")
-        submission, started = submit(slug, version, "application-lease-recovery")
-        pending = wait(
-            "receiver has accepted request with ACK withheld",
-            lambda: next(
-                (
-                    r
-                    for r in receiver()
-                    if r["path"] == "/hold" and r["response"] == "withheld"
+            # C: receiver durably records the first request but withholds its ACK.
+            # Kill only this disposable web worker after observing HTTP acceptance.
+            slug, version = fixture("/hold")
+            submission, started = submit(slug, version, "application-lease-recovery")
+            pending = wait(
+                "receiver has accepted request with ACK withheld",
+                lambda: next(
+                    (
+                        r
+                        for r in receiver()
+                        if r["path"] == "/hold" and r["response"] == "withheld"
+                    ),
+                    None,
                 ),
-                None,
-            ),
-        )
-        leased = state(submission)
-        assert (
-            len(leased) == 1
-            and leased[0]["status"] == "processing"
-            and leased[0]["locked_until"]
-        )
-        dc("kill", "-s", "SIGKILL", "web")
-        dc("start", "web")
-        wait("lease expiry and real cron redelivery", lambda: completed(submission))
-        save_scenario("C_application_restart_lost_ack", submission, started, leased)
-        attempts = report["scenarios"]["C_application_restart_lost_ack"]["attempts"]
-        assert (
-            attempts[0]["error_code"] == "WORKER_LEASE_EXPIRED"
-            and attempts[1]["http_status"] == 200
-        )
-        assert (
-            len(report["scenarios"]["C_application_restart_lost_ack"]["receiver"]) == 2
-        )
+            )
+            leased = state(submission)
+            assert (
+                len(leased) == 1
+                and leased[0]["status"] == "processing"
+                and leased[0]["locked_until"]
+            )
+            dc("kill", "-s", "SIGKILL", "web")
+            dc("start", "web")
+            wait("lease expiry and real cron redelivery", lambda: completed(submission))
+            save_scenario("C_application_restart_lost_ack", submission, started, leased)
+            attempts = report["scenarios"]["C_application_restart_lost_ack"]["attempts"]
+            assert (
+                attempts[0]["error_code"] == "WORKER_LEASE_EXPIRED"
+                and attempts[1]["http_status"] == 200
+            )
+            assert (
+                len(report["scenarios"]["C_application_restart_lost_ack"]["receiver"])
+                == 2
+            )
 
-        before_restart = sql(
-            "select (select count(*) from submissions) as submissions, (select count(*) from delivery_attempts) as attempts"
-        )
-        dc("restart", "postgres", "redis")
-        wait(
-            "PostgreSQL and Redis restart with application data retained",
-            lambda: (
-                sql(
-                    "select (select count(*) from submissions) as submissions, (select count(*) from delivery_attempts) as attempts"
-                )
-                == before_restart
-            ),
-        )
-        dc("up", "-d", "--wait")
-        report["storageRestartRetainedCounts"] = before_restart
+            before_restart = sql(
+                "select (select count(*) from submissions) as submissions, (select count(*) from delivery_attempts) as attempts"
+            )
+            dc("restart", "postgres", "redis")
+            wait(
+                "PostgreSQL and Redis restart with application data retained",
+                lambda: (
+                    sql(
+                        "select (select count(*) from submissions) as submissions, (select count(*) from delivery_attempts) as attempts"
+                    )
+                    == before_restart
+                ),
+            )
+            dc("up", "-d", "--wait")
+            report["storageRestartRetainedCounts"] = before_restart
 
         cron = graphql(
             "{ stream(query:{limit:100,includeInternalEvents:true}) { id trigger type createdAt runs { id status startedAt finishedAt function { slug } } } }"
         )
-        cron_runs = [
+        completed_cron_runs = [
             run
             for item in cron["stream"]
             for run in item.get("runs") or []
             if run.get("function", {}).get("slug") == "form-forge-drain-outbox"
             and run["status"] == "COMPLETED"
         ]
-        assert cron_runs
-        report["completedRecoveryCronRuns"] = cron_runs
+        assert completed_cron_runs
+        report["completedRecoveryCronRuns"] = completed_cron_runs
         report["versions"] = {
             service: run(
                 [
@@ -572,168 +723,576 @@ commit;""")
             }.items()
         }
 
-        # E: add pending work with scheduler stopped, then quiesce the source.
+        # One maintenance boundary contains C (existing completed history), B
+        # (new retry), and A (new submission while Inngest is stopped).
+        cold = {"backupStartedAt": None, "expected": {}, "negativeControls": {}}
+        report["scenarios"]["E_full_cold_restore"] = cold
+        completed_id = report["scenarios"]["A_scheduler_outage"]["submissionId"]
+        completed_delivery = completed(completed_id)[0]
+        slug, version = fixture("/retry")
+        retry_submission, retry_started = submit(slug, version, "cold-retry")
+        retry_pending = wait(
+            "cold backup retry has persisted 503 and due time",
+            lambda: next(
+                (
+                    r
+                    for r in state(retry_submission)
+                    if r["status"] == "pending"
+                    and r["attempt_count"] == 1
+                    and r["next_attempt_at"]
+                ),
+                None,
+            ),
+        )
+        scheduler_before = graphql(
+            "{ functions { id slug url triggers { type value } } stream(query:{limit:100,includeInternalEvents:true}) { id runs { id status function { slug } } } }"
+        )
+        scheduler_run_ids = {
+            r["id"]
+            for item in scheduler_before["stream"]
+            for r in item.get("runs") or []
+        }
         dc("stop", "inngest")
         slug, version = fixture("/success")
-        restored_submission, _ = submit(slug, version, "pending-at-backup")
-        snapshot = sql(
-            "select (select count(*) from form_versions) as versions, (select count(*) from submissions) as submissions, (select count(*) from webhook_endpoints) as endpoints, (select count(*) from outbox_events where status='pending') as pending"
+        pending_submission, pending_started = submit(
+            slug, version, "cold-pending-outbox"
         )
-        schemas = sql(
-            "select id,schema_hash,md5(schema::text) as digest from form_versions order by id"
+        atomic = sql(
+            f"select (select count(*) from submissions where id={quote(pending_submission)}) as submissions, (select count(*) from outbox_events where aggregate_id={quote(pending_submission)} and status='pending') as outbox"
         )
+        if atomic != [{"submissions": 1, "outbox": 1}] or state(pending_submission):
+            raise RuntimeError("Cold pending submission/outbox is not atomic")
+        if state(retry_submission) != [retry_pending]:
+            raise RuntimeError("Retry advanced before backup boundary")
+        # Quiesce application writers before Redis diagnostic snapshot. backup.sh
+        # itself still stops and verifies all four services before copying stores.
         dc("stop", "ingress", "web")
-        backup = directory / "application.dump"
-        with backup.open("wb") as destination:
-            subprocess.run(
-                [
-                    *compose,
-                    "exec",
-                    "-T",
-                    "postgres",
-                    "pg_dump",
-                    "-U",
-                    "form_forge",
-                    "-d",
-                    "form_forge",
-                    "-Fc",
-                ],
-                stdout=destination,
-                check=True,
-                env=environment,
-            )
+        expected = {name: sql(query) for name, query in INVARIANTS.items()}
+        redis_before_at = time.monotonic()
+        redis_before = redis_state()
+        cold.update(
+            {
+                "expected": expected,
+                "atomicPending": atomic,
+                "pendingSubmissionId": pending_submission,
+                "retrySubmissionId": retry_submission,
+                "completedSubmissionId": completed_id,
+                "schedulerBefore": scheduler_before,
+                "retryAtBoundary": retry_pending,
+                "receiverBefore": json.loads(
+                    run(
+                        [
+                            *compose,
+                            "exec",
+                            "-T",
+                            "receiver",
+                            "node",
+                            "--input-type=module",
+                            "-e",
+                            "console.log(await(await fetch('http://localhost:8889/evidence')).text())",
+                        ],
+                        env=environment,
+                    )
+                ),
+            }
+        )
+        backup = directory / "backup"
+        cold["backupStartedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        backup_environment = {
+            **environment,
+            "COMPOSE_PROJECT_NAME": project,
+            "COMPOSE_FILE": "deploy/compose.yaml"
+            + os.pathsep
+            + "deploy/acceptance/compose.yaml",
+        }
         run(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                restore_container,
-                "--network",
-                project + "_default",
-                "--env-file",
-                str(env_file),
-                "-e",
-                "POSTGRES_USER=form_forge",
-                "-e",
-                "POSTGRES_DB=form_forge",
-                "-v",
-                restore_volume + ":/var/lib/postgresql/data",
-                "postgres:16.14-bookworm",
-            ]
+            ["sh", str(installation / "deploy/backup.sh"), str(backup)],
+            env=backup_environment,
         )
-        wait(
-            "isolated restore database ready",
-            lambda: (
-                subprocess.run(
-                    [
-                        "docker",
-                        "exec",
-                        restore_container,
-                        "pg_isready",
-                        "-U",
-                        "form_forge",
-                    ],
-                    capture_output=True,
-                    check=False,
-                ).returncode
-                == 0
-            ),
-        )
-        with backup.open("rb") as source:
-            subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    "-i",
-                    restore_container,
-                    "pg_restore",
-                    "-U",
-                    "form_forge",
-                    "-d",
-                    "form_forge",
-                    "--no-owner",
-                    "--exit-on-error",
-                ],
-                stdin=source,
-                check=True,
-                capture_output=True,
+        cold["backupArtifactHashes"] = verify_backup(backup)
+        cold["backupBoundary"] = json.loads((backup / "BACKUP.json").read_text())
+        dc("stop", "postgres")
+        source_containers = inspect_project(project)
+        if any(
+            c["State"]["Running"]
+            for c in source_containers
+            if c["Config"]["Labels"]["com.docker.compose.service"] != "receiver"
+        ):
+            raise RuntimeError("Source writers or PostgreSQL are still running")
+
+        # Corruption is rejected before creating any destination resources.
+        corrupt = directory / "corrupt-backup"
+        shutil.copytree(backup, corrupt)
+        with (corrupt / "scheduler-queue.tar.gz").open("ab") as stream:
+            stream.write(b"corrupt-control")
+        try:
+            verify_backup(corrupt)
+        except ValueError as error:
+            cold["negativeControls"]["corruptArchive"] = {
+                "refused": True,
+                "reason": str(error),
+                "destinationStarted": False,
+            }
+        else:
+            raise RuntimeError("Corrupted archive was accepted")
+        if inspect_project(destination_project):
+            raise RuntimeError(
+                "Destination unexpectedly exists before checksum verification"
             )
-        override = directory / "restore.yaml"
-        override.write_text(
-            "services:\n  web:\n    environment:\n      DATABASE_URL: postgresql://form_forge:${POSTGRES_PASSWORD}@"
-            + restore_container
-            + ":5432/form_forge\n"
+        # Only backed-up configuration and this same frozen release are used.
+        destination_deploy = destination_installation / "deploy"
+        shutil.copyfile(backup / "installation.env", destination_deploy / ".env")
+        shutil.copytree(backup / "tls", destination_deploy / "tls")
+        shutil.copytree(backup / "receiver-tls", destination_deploy / "receiver-tls")
+        shutil.copytree(backup / "tls", destination_deploy / "app-tls")
+        for name in cold["backupBoundary"]["composeFiles"]:
+            shutil.copyfile(
+                backup / "configuration" / name, destination_installation / name
+            )
+        restored_keys = dict(
+            line.split("=", 1)
+            for line in (destination_deploy / ".env").read_text().splitlines()
         )
-        compose.extend(["-f", str(override)])
-        dc("up", "-d", "--wait", "web", "ingress")
-        # Query the isolated destination via pg in web without emitting decrypted secrets.
-        verify = "const{Pool}=await import('pg');const{createDecipheriv}=await import('node:crypto');const p=new Pool({connectionString:process.env.DATABASE_URL});const r=await p.query(\"select secret_ciphertext from webhook_endpoints\");for(const x of r.rows){const[v,i,t,b]=x.secret_ciphertext.split('.');if(v!=='v1')throw Error('version');const c=createDecipheriv('aes-256-gcm',Buffer.from(process.env.WEBHOOK_ENCRYPTION_KEY,'base64'),Buffer.from(i,'base64url'));c.setAuthTag(Buffer.from(t,'base64url'));c.update(Buffer.from(b,'base64url'));c.final()}const s=await p.query(\"select (select count(*) from form_versions)::int as versions,(select count(*) from submissions)::int as submissions,(select count(*) from webhook_endpoints)::int as endpoints,(select count(*) from outbox_events where status='pending')::int as pending\");console.log(JSON.stringify(s.rows));await p.end()"
-        restored = json.loads(
-            dc("exec", "-T", "web", "node", "--input-type=module", "-e", verify)
+        restored_keys.update(
+            {"ACCEPTANCE_DIR": str(destination_deploy), "HTTPS_PORT": "19443"}
         )
-        assert restored == snapshot
-        restored_schemas = json.loads(
-            dc(
+        (destination_deploy / ".env").write_text(
+            "\n".join(f"{k}={v}" for k, v in restored_keys.items()) + "\n"
+        )
+        (destination_deploy / ".env").chmod(0o600)
+        # Keep the same controlled receiver alive. Its observations/ordinals are
+        # external experiment state, explicitly retained across restore.
+        receiver_network = project + "_receiver-fixture"
+        overlay = destination_deploy / "acceptance/compose.yaml"
+        text = overlay.read_text()
+        text = (
+            text[: text.index("\nnetworks:")]
+            + "\nnetworks:\n  receiver-fixture:\n    external: true\n    name: "
+            + receiver_network
+            + "\n"
+        )
+        overlay.write_text(text)
+        destination_compose = [
+            "docker",
+            "compose",
+            "--env-file",
+            str(destination_deploy / ".env"),
+            "-p",
+            destination_project,
+            "-f",
+            str(destination_deploy / "compose.yaml"),
+            "-f",
+            str(overlay),
+        ]
+        source_volumes = [
+            project + "_" + n
+            for n in ("application-data", "scheduler-history", "scheduler-queue")
+        ]
+        destination_volumes = [
+            destination_project + "_" + n
+            for n in ("application-data", "scheduler-history", "scheduler-queue")
+        ]
+        destination_owned = claim_new_destination(
+            project,
+            destination_project,
+            source_volumes,
+            destination_volumes,
+            run(["docker", "volume", "ls", "-q"]).splitlines(),
+        )
+        verify_backup(backup)
+        source_compose = compose
+        compose = destination_compose
+        dc("config", "--quiet")
+        # Create stopped services/volumes, inspect emptiness, then follow the
+        # published pg_restore + complete-directory tar extraction procedure.
+        dc("create", "--no-build", "postgres", "redis", "inngest")
+        for service, path in (
+            ("postgres", "/var/lib/postgresql/data"),
+            ("inngest", "/var/lib/inngest"),
+            ("redis", "/data"),
+        ):
+            listing = dc(
+                "run",
+                "--rm",
+                "--no-deps",
+                "-T",
+                "--entrypoint",
+                "sh",
+                service,
+                "-c",
+                'find "$1" -mindepth 1 -print',
+                "empty-check",
+                path,
+            )
+            if listing:
+                raise RuntimeError("Destination volume is not empty: " + service)
+        cold["destinationInitiallyEmpty"] = destination_volumes
+        dc("up", "-d", "--wait", "postgres")
+        transfer(
+            [
+                *compose,
                 "exec",
                 "-T",
-                "web",
-                "node",
-                "--input-type=module",
-                "-e",
-                "const{Pool}=await import('pg');const p=new Pool({connectionString:process.env.DATABASE_URL});const r=await p.query('select id,schema_hash,md5(schema::text) as digest from form_versions order by id');console.log(JSON.stringify(r.rows));await p.end()",
-            )
+                "postgres",
+                "pg_restore",
+                "-U",
+                "form_forge",
+                "-d",
+                "form_forge",
+                "--no-owner",
+                "--exit-on-error",
+            ],
+            backup / "application.dump",
         )
-        assert schemas == restored_schemas
-        # Retain matching scheduler history/queue, resume the scheduler unchanged.
-        dc("start", "inngest")
-        wait(
-            "pending restored outbox reaches receiver",
-            lambda: any(
-                r["path"] == "/success"
-                and r["deliveryId"]
-                not in {s["delivery"]["id"] for s in report["scenarios"].values()}
-                for r in receiver()
-            ),
-        )
-
-        def restored_completed():
-            result = json.loads(
-                dc(
-                    "exec",
+        for service, path, name in (
+            ("inngest", "/var/lib/inngest", "scheduler-history.tar.gz"),
+            ("redis", "/data", "scheduler-queue.tar.gz"),
+        ):
+            transfer(
+                [
+                    *compose,
+                    "run",
+                    "--rm",
+                    "--no-deps",
                     "-T",
-                    "web",
-                    "node",
-                    "--input-type=module",
-                    "-e",
-                    "const{Pool}=await import('pg');const p=new Pool({connectionString:process.env.DATABASE_URL});const r=await p.query(\"select id,status,attempt_count from webhook_deliveries where submission_id='"
-                    + restored_submission
-                    + "'\");console.log(JSON.stringify(r.rows));await p.end()",
-                )
+                    "--entrypoint",
+                    "sh",
+                    service,
+                    "-c",
+                    f"cd {path} && tar -xzf -",
+                ],
+                backup / name,
             )
-            return (
-                result
-                if len(result) == 1 and result[0]["status"] == "succeeded"
-                else None
+            copied = directory / (service + "-restored.tar.gz")
+            transfer(
+                [
+                    *compose,
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "-T",
+                    "--entrypoint",
+                    "tar",
+                    service,
+                    "-C",
+                    path,
+                    "-czf",
+                    "-",
+                    ".",
+                ],
+                copied,
+                write=True,
             )
-
-        result = wait("restored attempt result committed", restored_completed)
-        report["scenarios"]["E_isolated_restore"] = {
-            "snapshotCounts": snapshot,
-            "restoredCounts": restored,
-            "endpointSecretsDecrypt": True,
-            "pendingSubmissionId": restored_submission,
-            "delivery": result,
-            "schemaHashes": restored_schemas,
-            "scheduler": "retained matching SQLite and Redis volumes; not a scheduler snapshot restore",
+            expected_files = archive_files((backup / name).read_bytes())
+            if archive_files(copied.read_bytes()) != expected_files:
+                raise RuntimeError("Scheduler directory restore mismatch: " + service)
+            cold.setdefault("schedulerRestoredFiles", {})[service] = expected_files
+        cold["sqliteRestored"] = sqlite_metadata(
+            (directory / "inngest-restored.tar.gz").read_bytes()
+        )
+        if cold["sqliteRestored"] != sqlite_metadata(
+            (backup / "scheduler-history.tar.gz").read_bytes()
+        ):
+            raise RuntimeError("SQLite identities/history mismatch")
+        if (
+            not cold["sqliteRestored"]["apps"]
+            or len(cold["sqliteRestored"]["functions"]) != 3
+            or not cold["sqliteRestored"]["trace_runs"]
+        ):
+            raise RuntimeError("Restored scheduler lacks registration/run history")
+        restored = {name: sql(query) for name, query in INVARIANTS.items()}
+        if restored != expected:
+            raise RuntimeError("Application invariants changed during restore")
+        cold["restoredBeforeWorkers"] = restored
+        decrypt_command = [
+            "run",
+            "--rm",
+            "--no-deps",
+            "-T",
+            "--entrypoint",
+            "node",
+            "web",
+            "--input-type=module",
+            "-e",
+            DECRYPT,
+        ]
+        cold["decryption"] = json.loads(
+            dc(*decrypt_command, input=keys["RECEIVER_SECRET"])
+        )
+        wrong_env = directory / "wrong-key.env"
+        wrong_keys = {
+            **restored_keys,
+            "WEBHOOK_ENCRYPTION_KEY": base64.b64encode(
+                secrets.token_bytes(32)
+            ).decode(),
         }
+        sensitive_values.add(wrong_keys["WEBHOOK_ENCRYPTION_KEY"])
+        wrong_env.write_text(
+            "\n".join(f"{k}={v}" for k, v in wrong_keys.items()) + "\n"
+        )
+        wrong_env.chmod(0o600)
+        wrong_compose = list(compose)
+        wrong_compose[wrong_compose.index("--env-file") + 1] = str(wrong_env)
+        rejected = subprocess.run(
+            [*wrong_compose, *decrypt_command],
+            input=keys["RECEIVER_SECRET"],
+            text=True,
+            capture_output=True,
+            env=environment,
+            check=False,
+            timeout=60,
+        )
+        if (
+            rejected.returncode != 42
+            or "secret decryption refused" not in rejected.stdout
+        ):
+            raise RuntimeError("Wrong encryption key was not refused by decryption")
+        cold["negativeControls"]["wrongEncryptionKey"] = {
+            "refused": True,
+            "exitCode": rejected.returncode,
+            "deliveryProcessingStarted": False,
+        }
+        dc("up", "-d", "--wait", "redis")
+        cold["redisRestored"] = compare_redis(
+            redis_before, redis_state(), (time.monotonic() - redis_before_at) * 1000
+        )
+        dc("create", "--no-build", "web", "ingress")
+        cold["isolation"] = inspect_isolation(
+            source_containers,
+            inspect_project(destination_project),
+            project,
+            destination_project,
+            installation,
+            destination_installation,
+            receiver_network,
+        )
+        receiver_before = cold["receiverBefore"]
+        started_restore = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        cold["workersStartedAt"] = started_restore
+        dc("up", "-d", "--wait", "web", "inngest", "ingress")
+        cold["isolation"] = inspect_isolation(
+            inspect_project(project),
+            inspect_project(destination_project),
+            project,
+            destination_project,
+            installation,
+            destination_installation,
+            receiver_network,
+        )
+        restored_functions = wait(
+            "restored scheduler registration",
+            lambda: graphql("{ functions { id slug url triggers { type value } } }")[
+                "functions"
+            ],
+        )
+        if sorted(restored_functions, key=lambda r: r["id"]) != sorted(
+            scheduler_before["functions"], key=lambda r: r["id"]
+        ):
+            raise RuntimeError("Restored function identities changed")
+        cold["restoredFunctions"] = restored_functions
+        if internal("http://web:3000/api/inngest", "POST", {})["status"] not in (
+            401,
+            403,
+        ):
+            raise RuntimeError("Unsigned invocation accepted after restore")
+        wait(
+            "cold pending outbox delivered by real cron",
+            lambda: completed(pending_submission),
+        )
+        wait(
+            "cold retry delivered under restored logical ID",
+            lambda: completed(retry_submission),
+        )
+        save_scenario(
+            "F_cold_pending_outbox", pending_submission, pending_started, atomic
+        )
+        save_scenario(
+            "G_cold_pending_retry", retry_submission, retry_started, retry_pending
+        )
+        retry_final = completed(retry_submission)[0]
+        if (
+            retry_final["id"] != retry_pending["id"]
+            or retry_final["manual_retry_count"] != 0
+            or retry_final["attempt_count"] != 2
+        ):
+            raise RuntimeError("Restored retry identity/budget changed")
+        if [
+            r["http_status"]
+            for r in report["scenarios"]["G_cold_pending_retry"]["attempts"]
+        ] != [503, 200]:
+            raise RuntimeError("Restored retry lost attempt history")
+        # Require two completed ticks after both pending deliveries finish. Observe
+        # C throughout this bounded interval, separately checking logical rows and HTTP.
+        prior_cron_ids = {r["id"] for r in cron_runs()}
+        observation_started = time.monotonic()
+
+        def observed_two_ticks():
+            if completed(completed_id) != [completed_delivery]:
+                raise RuntimeError("Completed logical delivery changed")
+            observations = [
+                r for r in receiver() if r["deliveryId"] == completed_delivery["id"]
+            ]
+            original = [
+                r
+                for r in receiver_before
+                if r["deliveryId"] == completed_delivery["id"]
+            ]
+            if observations != original:
+                raise RuntimeError(
+                    "Completed delivery received an unexpected HTTP replay in observation window"
+                )
+            fresh = [r for r in cron_runs() if r["id"] not in prior_cron_ids]
+            return fresh if len(fresh) >= 2 else None
+
+        fresh_crons = wait(
+            "two additional completed recovery ticks without completed-delivery replay",
+            observed_two_ticks,
+            timeout=240,
+        )
+        cold["completedObservation"] = {
+            "delivery": completed_delivery,
+            "seconds": round(time.monotonic() - observation_started, 2),
+            "completedCronRuns": fresh_crons,
+            "newLogicalDelivery": False,
+            "httpRepeatsObserved": 0,
+        }
+        cold["newCompletedRecoveryCronRuns"] = [
+            r for r in cron_runs() if r["startedAt"] >= started_restore
+        ]
+        if not cold["newCompletedRecoveryCronRuns"]:
+            raise RuntimeError("No completed cron after restore")
+        final_invariants = {name: sql(query) for name, query in INVARIANTS.items()}
+        for name in ("schemas", "endpoints"):
+            if final_invariants[name] != expected[name]:
+                raise RuntimeError("Restored configuration changed: " + name)
+        if {r["id"] for r in final_invariants["submissions"]} != {
+            r["id"] for r in expected["submissions"]
+        }:
+            raise RuntimeError("Unexpected new/missing submission")
+        final_attempts = {r["id"]: r for r in final_invariants["attempts"]}
+        if any(final_attempts.get(r["id"]) != r for r in expected["attempts"]):
+            raise RuntimeError("Restored attempt history changed after processing")
+        for delivery in expected["deliveries"]:
+            if (
+                delivery["status"] == "succeeded"
+                and delivery not in final_invariants["deliveries"]
+            ):
+                raise RuntimeError("Previously completed logical delivery changed")
+        cold["finalInvariants"] = final_invariants
+        cold["receiverAfter"] = receiver()
+        invocation_stream = graphql(
+            "{ stream(query:{limit:100,includeInternalEvents:true}) { id runs { id status startedAt finishedAt function { slug } eventID } } }"
+        )
+        invocations = [
+            r
+            for item in invocation_stream["stream"]
+            for r in item.get("runs") or []
+            if r["status"] == "COMPLETED" and r["finishedAt"] >= started_restore
+        ]
+        # In 1.46.0 FunctionRun.event omits ExternalID; the root event resolver
+        # loads it. Use the documented internal event ID to obtain metadata only.
+        for invocation in invocations:
+            invocation["event"] = graphql(
+                "{ event(query:{eventId:"
+                + json.dumps(invocation["eventID"])
+                + "}) { id externalID name } }"
+            )["event"]
+        cold["signedInvocationEvidence"] = invocations
+        pending_event_ids = {
+            r["id"]
+            for r in expected["outbox"]
+            if r["aggregate_id"] == pending_submission
+        }
+        retry_event_ids = {
+            r["id"]
+            for r in final_invariants["outbox"]
+            if r["aggregate_id"] == retry_pending["id"]
+        }
+        for slug, event_ids in (
+            ("form-forge-process-submission", pending_event_ids),
+            ("form-forge-process-webhook-delivery", retry_event_ids),
+        ):
+            if not any(
+                r["function"]["slug"] == slug
+                and (r.get("event") or {}).get("externalID") in event_ids
+                for r in invocations
+            ):
+                raise RuntimeError("Missing completed restored invocation: " + slug)
+        cold["signedInvocationEvidence"] = invocations
+        cold["restoredHistoryRunIds"] = sorted(scheduler_run_ids)
+        cold["newRecoveryRunIds"] = sorted(
+            {r["id"] for r in invocations} - scheduler_run_ids
+        )
+        cold["scheduling"] = {
+            "retryDueAt": retry_pending["next_attempt_at"],
+            "mechanism": "application pending outbox/due-delivery recovery via real minute cron; no pre-created Inngest sleeping retry claimed",
+        }
+        # Signed SDK invocations completed the real application functions; these
+        # assertions combine signature rejection with persisted HTTPS/HMAC results.
+        cold["signedInvocationsCompleted"] = True
         report["status"] = "passed"
-    except Exception as error:
+    except (Exception, KeyboardInterrupt) as error:
         report["status"] = "failed"
-        report["error"] = str(error)
+        report["error"] = redact(str(error)) or "Acceptance interrupted"
         raise
     finally:
         print("Cleaning only this disposable project", flush=True)
-        cleanup = cleanup_resources(run, dc, project, restore_container, restore_volume)
+        cleanups = {}
+        if destination_owned:
+            cleanups[destination_project] = cleanup_resources(
+                run,
+                lambda *a, **k: run(
+                    [*destination_compose, "--profile", "fixture", *a],
+                    env=environment,
+                    **k,
+                ),
+                destination_project,
+            )
+        cleanups[project] = cleanup_resources(
+            run,
+            lambda *a, **k: run(
+                [
+                    "docker",
+                    "compose",
+                    "--env-file",
+                    str(env_file),
+                    "-p",
+                    project,
+                    "-f",
+                    str(installation / "deploy/compose.yaml"),
+                    "-f",
+                    str(installation / "deploy/acceptance/compose.yaml"),
+                    "--profile",
+                    "fixture",
+                    *a,
+                ],
+                env=environment,
+                **k,
+            ),
+            project,
+        )
+        cleanup = {
+            "passed": all(c["passed"] for c in cleanups.values()),
+            "projects": cleanups,
+        }
+        report["finishedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # Detect accidental retention even on failure paths, then persist only a
+        # redacted failure report. Bodies/signatures are never collected here.
+        try:
+            serialized = json.dumps(report)
+        except (TypeError, ValueError):
+            save_report(
+                report, args.output, cleanup
+            )  # Writes failed fallback and raises.
+            raise
+        redacted = redact(serialized)
+        if redacted != serialized:
+            report = json.loads(redacted)
+            report["status"] = "failed"
+            report["error"] = (
+                "Secret found in report; redacted evidence and refused success"
+            )
+            save_report(report, args.output, cleanup)
+            raise SystemExit(1)
         save_report(report, args.output, cleanup)
         print(f"Evidence: {args.output}", flush=True)
