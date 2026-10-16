@@ -7,8 +7,8 @@ import { env } from "@/env";
 import { assertProductionConfig } from "@/lib/production-config";
 import * as schema from "./schema";
 
-// Vercel functions do not execute next start or the standalone startup wrapper.
-if (process.env.NODE_ENV === "production" && process.env.VERCEL === "1") {
+// Netlify functions do not execute next start or the standalone startup wrapper.
+if (process.env.NODE_ENV === "production" && process.env.SITE_ID) {
   assertProductionConfig(process.env);
 }
 

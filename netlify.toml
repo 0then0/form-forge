@@ -1,0 +1,8 @@
+[build]
+  base = "."
+  command = "pnpm exec turbo run build --filter=@form-forge/web..."
+  publish = "apps/web/.next"
+
+[build.environment]
+  NODE_VERSION = "24.21.0"
+  PNPM_FLAGS = "--frozen-lockfile --shamefully-hoist"

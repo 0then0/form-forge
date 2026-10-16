@@ -55,7 +55,7 @@ export default withSentryConfig(
   (phase: string) => {
     if (
       phase === PHASE_PRODUCTION_SERVER ||
-      (phase === PHASE_PRODUCTION_BUILD && process.env.VERCEL === "1")
+      (phase === PHASE_PRODUCTION_BUILD && Boolean(process.env.SITE_ID))
     ) {
       assertProductionConfig(process.env);
     }

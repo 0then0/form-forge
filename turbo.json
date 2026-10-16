@@ -1,7 +1,7 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": [
-    "VERCEL",
+    "SITE_ID",
     "DATABASE_URL",
     "AUTH_SECRET",
     "NEXTAUTH_URL",

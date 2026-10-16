@@ -39,4 +39,5 @@ test("forwards the application env contract and invalidates builds for env files
     ]),
   );
   expect(config.tasks.test.cache).toBe(false);
+  expect(config.globalEnv).toContain("SITE_ID");
 });
