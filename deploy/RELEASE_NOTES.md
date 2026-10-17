@@ -1,34 +1,69 @@
-# 0.1.0-rc.2
+# 0.1.0
 
-Maintenance cold restore and stronger backup verification for the single-host,
-source-built deployment.
+First stable release of Form Forge, a free/libre, Apache 2.0 form platform with
+versioned schemas, hosted forms, workspaces, and inspectable webhook delivery.
 
-- Full PostgreSQL, Inngest SQLite and Redis restore into three new empty volumes
-  in a separate Compose project, without source storage access.
-- Real signed Inngest cron recovery of pending outbox and retry work, preserving
-  logical delivery IDs, attempt history and retry budgets.
-- Independent scheduler archive, SQLite history and Redis state verification
-  before workers start, plus endpoint-secret decryption and HTTPS HMAC checks.
-- Corrupted backup and incorrect encryption-key refusal before processing.
-- Complete backup checksums covering installation keys, TLS, deployment
-  configuration and release provenance; incomplete backups remain marked.
-- Streaming checksum calculation and cleanup that preserves pre-existing
-  destination stores when restoration is refused.
-- Regression tests for backup completeness, isolation, bounded checksum memory,
-  scoped cleanup and failure reporting. Python 3.9 remains supported.
+## Changes since 0.1.0-rc.2
 
-Original rc.1 backups omit the new metadata and complete checksum coverage and
-cannot pass the stricter verification unchanged. Create a new maintenance backup
-with this release to use the strengthened verification procedure.
+- Google, Apple, GitLab, and ChatGPT sign-in alongside GitHub. Link methods from
+  an authenticated account to retain the same user and workspace memberships.
+  Matching email addresses never automatically merge accounts.
+- Read-only access to archived forms and their published versions, archive
+  restoration, and owner-only permanent deletion with name confirmation.
+  Deletion refuses active background processing without deadlocking workers.
+- Shared client/server validation with immediate field errors, strict number
+  input handling, and clearer preview validation messages.
+- Optional checkbox agreement links, interactive select-option editing, field
+  insertion at every boundary, and clearer version comparisons.
+- Collapsed, independently scrollable previews, responsive account/workspace
+  navigation, improved dark-mode controls, and reliable theme initialization.
+- Direct view/publish actions in the form list, clickable submission rows, and
+  separate archive and last-save timestamps.
+- Netlify deployment with Neon PostgreSQL and Inngest Cloud, alongside the
+  existing source-built Docker Compose installation.
+- Recovery/outbox scheduling every five minutes. A new submission and its webhook
+  delivery use separate outbox stages, so initial delivery can wait roughly ten
+  minutes before additional queue or transport delays.
+- Clearer licensing and privacy information: no product analytics, advertising
+  trackers, or usage reports to the project authors. Deployment owners control
+  optional Sentry error and performance reporting.
 
-Application APIs, authentication, dependencies, database schema and at-least-once
-delivery semantics are unchanged. The full extended acceptance also verifies
-graceful scheduler restart, lost acknowledgement recovery and retained data after
-PostgreSQL/Redis restart. Completed delivery is observed over two additional
-completed recovery ticks; this is not an exactly-once network delivery guarantee.
+## Upgrade
 
-The reference configuration is verified with Linux arm64 containers on one host.
-Public DNS/TLS and live OAuth require installation verification. This release does
-not establish cross-version or cross-architecture restore, abrupt power-loss
-recovery, point-in-time recovery, high availability or production capacity.
+Back up the database, installation keys, and scheduler storage before updating.
+No database migrations were added since rc.2; retain the existing migration history.
+Configure additional OAuth providers only when both client credentials are ready,
+using the callback URLs documented in the root README. GitHub remains required.
+Apple requires HTTPS and a client-secret JWT that must be renewed before expiry.
+ChatGPT website sign-in requires an approved OpenAI OAuth client; an API key is
+not sufficient. Unconfigured sign-in methods remain unavailable.
+
+Register the updated Inngest functions so the recovery job uses the five-minute
+schedule. Restoring an archived published form reopens its existing public URL.
+Permanent deletion also removes submissions, versions, webhook endpoints,
+delivery history, and queued events; audit history and consumed usage remain.
+
+Checkbox links extend the stored schema. Older versions that reject unknown
+schema properties cannot read forms containing those links, so a code-only
+downgrade is not supported for affected forms. Original rc.1 backups also lack
+the stricter backup metadata introduced in rc.2; create a fresh maintenance
+backup before relying on the current restore verification.
+
+## Verification and scope
+
+The application revision passed GitHub CI: supported Node-version tests, static
+checks, PostgreSQL integration tests, deployment regressions, the browser
+lifecycle suite, production build, and production smoke test. The deletion fix
+is covered by 46 PostgreSQL integration tests, including competing submission
+and endpoint locks, transaction rollback, and successful retry after processing.
+
+This release does not claim that live OAuth, public DNS/TLS, or the full
+three-store cold-restore acceptance suite were reverified for this revision.
+Verify those installation-specific paths before enabling them in production.
+Webhook delivery remains at-least-once; receivers must deduplicate delivery IDs.
+High availability, production capacity, point-in-time recovery, and
+cross-architecture restore are outside the verified scope.
+
+Artifacts contain source, a provenance manifest, and SHA-256 checksums. Images
+are built for the installation's public hostname; no prebuilt image is published.
 See [installation](README.md) and [verification](VERIFICATION.md).

@@ -359,7 +359,7 @@ For Netlify hosting with Neon PostgreSQL and Inngest Cloud, follow the
 [Netlify deployment guide](deploy/NETLIFY.md). The repository includes the Netlify
 build configuration and platform-specific trusted client IP handling.
 
-For the first reproducible single-host release candidate, use the
+For a reproducible single-host installation, use the
 [Docker Compose installation, upgrade and recovery guide](deploy/README.md).
 It builds from source for your public hostname and runs a real self-hosted
 Inngest with persistent scheduler storage. See the

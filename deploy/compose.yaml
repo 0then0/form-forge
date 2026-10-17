@@ -67,7 +67,7 @@ services:
     stop_grace_period: 60s
 
   migrate:
-    image: form-forge-migrate:0.1.0-rc.2
+    image: form-forge-migrate:0.1.0
     build:
       context: ..
       target: migrate
@@ -80,7 +80,7 @@ services:
     init: true
 
   web:
-    image: form-forge:0.1.0-rc.2
+    image: form-forge:0.1.0
     build:
       context: ..
       target: runtime
