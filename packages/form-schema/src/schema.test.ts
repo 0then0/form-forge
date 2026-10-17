@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { formSchemaV1Schema, submissionRequestSchema } from "./schema";
+import {
+  defaultFormSchema,
+  formSchemaV1Schema,
+  submissionRequestSchema,
+} from "./schema";
 import {
   MAX_LONG_TEXT_LENGTH,
   MAX_SHORT_TEXT_LENGTH,
@@ -319,5 +323,80 @@ describe("FormSchemaV1", () => {
         ],
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("invalid optional numbers", () => {
+  it.each([
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    "letters",
+    "12abc",
+    "0x10",
+    true,
+    {},
+  ])("rejects %s instead of treating it as empty", (value) => {
+    const form = defaultFormSchema();
+    form.fields = [
+      {
+        id: crypto.randomUUID(),
+        key: "amount",
+        label: "Amount",
+        required: false,
+        type: "number",
+        width: "full",
+      },
+    ];
+    expect(normalizeSubmission(form, { amount: value })).toEqual({
+      success: false,
+      errors: [{ field: "amount", message: "Enter a valid number" }],
+    });
+  });
+});
+
+describe("checkbox agreement links", () => {
+  const checkbox = {
+    id: "11111111-1111-4111-8111-111111111111",
+    key: "consent",
+    label: "I accept",
+    required: true,
+    type: "checkbox" as const,
+    width: "full" as const,
+  };
+  it("supports optional links without changing existing checkbox schemas", () => {
+    const form = { ...defaultFormSchema(), fields: [checkbox] };
+    expect(formSchemaV1Schema.safeParse(form).success).toBe(true);
+    const linked = formSchemaV1Schema.parse({
+      ...form,
+      fields: [
+        {
+          ...checkbox,
+          link: { label: " Terms ", url: " https://example.com/terms " },
+        },
+      ],
+    });
+    expect(linked.fields[0]).toMatchObject({
+      link: { label: "Terms", url: "https://example.com/terms" },
+    });
+    expect(normalizeSubmission(linked, { consent: true })).toMatchObject({
+      success: true,
+      receivedValues: { consent: true },
+    });
+  });
+  it.each([
+    "javascript:alert(1)",
+    "https:example.com/terms",
+    "data:text/html,test",
+    "ftp://example.com/terms",
+    "//example.com/terms",
+    "https://user:password@example.com/terms",
+    "",
+  ])("rejects unsafe or incomplete link %s", (url) => {
+    expect(
+      formSchemaV1Schema.safeParse({
+        ...defaultFormSchema(),
+        fields: [{ ...checkbox, link: { label: "Terms", url } }],
+      }).success,
+    ).toBe(false);
   });
 });

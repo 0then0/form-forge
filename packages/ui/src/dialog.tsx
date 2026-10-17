@@ -13,13 +13,19 @@ export const DialogClose = DialogPrimitive.Close;
 export const DialogContent = ({
   children,
   className,
+  variant = "default",
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content>) => (
+}: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  variant?: "default" | "panel";
+}) => (
   <DialogPrimitive.Portal>
     <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-slate-950/40" />
     <DialogPrimitive.Content
       className={cn(
-        "fixed top-1/2 left-1/2 z-50 max-h-[85vh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl focus:outline-none",
+        "fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-slate-200 bg-white shadow-xl focus:outline-none",
+        variant === "panel"
+          ? "flex max-h-[85dvh] max-w-4xl flex-col overflow-hidden"
+          : "max-h-[85vh] max-w-lg overflow-y-auto p-6",
         className,
       )}
       {...props}

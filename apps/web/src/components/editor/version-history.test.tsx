@@ -1,5 +1,5 @@
 import { defaultFormSchema, formSchemaV1Schema } from "@form-forge/form-schema";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -58,6 +58,55 @@ describe("VersionHistory", () => {
       screen.getByText(/0 added, 0 changed, 0 removed fields/),
     ).toBeVisible();
     expect(screen.queryByText(/Form settings changed/)).not.toBeInTheDocument();
+  });
+
+  it("shows readable changes and keeps schema JSON collapsed", async () => {
+    const field = {
+      id: "22222222-2222-4222-8222-222222222222",
+      key: "name",
+      label: "Name",
+      required: false,
+      type: "shortText" as const,
+      width: "full" as const,
+    };
+    const before = { ...schema, title: "Contact", fields: [field] };
+    const after = {
+      ...before,
+      title: "Feedback",
+      fields: [{ ...field, label: "Full name", required: true }],
+    };
+    render(
+      <VersionHistory
+        canEdit
+        currentSchema={after}
+        draftRevision={version.publishedAt}
+        formId="form-id"
+        initialCursor={null}
+        onRestore={vi.fn()}
+        versions={[{ ...version, schema: before }]}
+        workspaceSlug="workspace"
+      />,
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Inspect" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByText("Form settings", { exact: true })).toBeVisible();
+    expect(dialog.getByText("Contact", { exact: true })).toBeVisible();
+    expect(dialog.getByText("Feedback", { exact: true })).toBeVisible();
+    expect(dialog.getByText("Changed", { exact: true })).toBeVisible();
+    expect(dialog.getByText("Required", { exact: true })).toBeVisible();
+    expect(dialog.getByText("No", { exact: true })).toBeVisible();
+    expect(dialog.getByText("Yes", { exact: true })).toBeVisible();
+    expect(
+      dialog.getByRole("region", { name: "Version 1 schema JSON" }),
+    ).not.toBeVisible();
+    await userEvent
+      .setup()
+      .click(dialog.getByText("Schema JSON", { exact: true }));
+    expect(
+      dialog.getByRole("region", { name: "Version 1 schema JSON" }),
+    ).toBeVisible();
   });
 
   it("does not duplicate an already loaded version", async () => {

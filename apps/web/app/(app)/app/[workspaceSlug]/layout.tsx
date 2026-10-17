@@ -31,25 +31,53 @@ export default async function WorkspaceLayout({
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex h-16 max-w-screen-2xl items-center gap-4 px-4 sm:px-6">
+        <div className="mx-auto flex h-16 max-w-screen-2xl items-center gap-2 px-4 sm:gap-4 sm:px-6">
           <Link
             href={`/app/${workspaceSlug}/forms`}
-            className="hidden items-center gap-2 font-semibold sm:flex"
+            className="hidden shrink-0 items-center gap-2 whitespace-nowrap font-semibold sm:flex"
           >
             <BrandMark className="size-7 rounded-md" />
             <span>Form Forge</span>
           </Link>
-          <div className="hidden h-5 w-px bg-slate-200 sm:block" />
-          <WorkspaceSwitcher
-            currentSlug={workspaceSlug}
-            workspaces={workspaces}
-          />
-          <Badge className="hidden sm:inline-flex">{workspace.role}</Badge>
-          <div className="ml-auto flex items-center gap-3">
+          <div className="hidden h-5 w-px shrink-0 bg-slate-200 sm:block" />
+          <div className="min-w-0 max-w-xs flex-1">
+            <div className="mb-0.5 flex items-center gap-2">
+              <p className="text-[10px] font-medium tracking-wide text-slate-500 uppercase">
+                Workspace
+              </p>
+              <Badge className="hidden shrink-0 px-1.5 py-0 text-[10px] sm:inline-flex">
+                {workspace.role}
+              </Badge>
+            </div>
+            <WorkspaceSwitcher
+              currentSlug={workspaceSlug}
+              workspaces={workspaces}
+            />
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-3">
             <ThemeToggle />
-            <span className="hidden max-w-52 truncate text-sm text-slate-600 sm:block">
-              {workspace.user.email}
-            </span>
+            <Link
+              href="/account"
+              aria-label="Account and sign-in methods"
+              className="flex min-w-0 items-center gap-2 rounded-md p-1 hover:bg-slate-50"
+            >
+              <span
+                aria-hidden="true"
+                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700"
+              >
+                {(workspace.user.name || workspace.user.email || "A")
+                  .slice(0, 1)
+                  .toUpperCase()}
+              </span>
+              <span className="hidden min-w-0 lg:block">
+                <span className="block text-[10px] font-medium tracking-wide text-slate-500 uppercase">
+                  Account
+                </span>
+                <span className="block max-w-40 truncate text-sm font-medium">
+                  {workspace.user.name || "My account"}
+                </span>
+              </span>
+            </Link>
             <SignOutButton />
           </div>
         </div>

@@ -5,6 +5,7 @@ import {
   MAX_SHORT_TEXT_LENGTH,
   MAX_SUBMISSION_FIELDS,
 } from "./limits";
+import { isSafeHttpUrl } from "./safe-url";
 import { patternLooksSafe } from "./safe-pattern";
 import type { FormSchemaV1 } from "./types";
 
@@ -173,6 +174,20 @@ const checkboxFieldSchema = z
   .object({
     ...baseFieldShape,
     type: z.literal("checkbox"),
+    link: z
+      .object({
+        label: z.string().trim().min(1).max(120),
+        url: z
+          .string()
+          .trim()
+          .max(2_048)
+          .refine(
+            isSafeHttpUrl,
+            "Use a full http:// or https:// URL without embedded credentials",
+          ),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

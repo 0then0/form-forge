@@ -13,19 +13,19 @@ export const metadata: Metadata = {
   description: "Headless forms with versioned schemas and reliable delivery.",
 };
 
-const themeInitializer = `try{const key=${JSON.stringify(THEME_STORAGE_KEY)};const value=localStorage.getItem(key);const theme=value==="light"||value==="dark"||value==="system"?value:"system";const dark=theme==="dark"||(theme==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);document.documentElement.dataset.theme=theme;document.documentElement.style.colorScheme=dark?"dark":"light"}catch{const dark=matchMedia("(prefers-color-scheme: dark)").matches;document.documentElement.classList.toggle("dark",dark);document.documentElement.style.colorScheme=dark?"dark":"light"}`;
-
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body>
+      <head>
         <script
-          // biome-ignore lint/security/noDangerouslySetInnerHtml: Static trusted bootstrap prevents a theme flash before hydration.
-          dangerouslySetInnerHTML={{ __html: themeInitializer }}
+          async
+          blocking="render"
+          data-storage-key={THEME_STORAGE_KEY}
           id="theme-initializer"
+          src="/theme-initializer.js"
         />
-        {children}
-      </body>
+      </head>
+      <body>{children}</body>
     </html>
   );
 }

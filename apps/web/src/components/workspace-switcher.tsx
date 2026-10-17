@@ -19,7 +19,7 @@ export const WorkspaceSwitcher = ({
   return (
     <Select
       aria-label="Workspace"
-      className="h-9 w-32 py-1 sm:w-auto sm:min-w-44"
+      className="h-9 min-w-0 py-1"
       value={currentSlug}
       onChange={(event) => {
         if (confirmClientNavigation()) {

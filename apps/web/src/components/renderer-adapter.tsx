@@ -1,5 +1,6 @@
 "use client";
 
+import { isSafeHttpUrl } from "@form-forge/form-schema";
 import type {
   FieldShellProps,
   RendererComponents,
@@ -24,7 +25,23 @@ const FieldShell = ({ children, error, field }: FieldShellProps) => {
       {field.type === "checkbox" ? (
         <div className="flex items-center gap-2">
           {children}
-          {label}
+          <div className="text-sm">
+            {label}
+            {field.link && isSafeHttpUrl(field.link.url) ? (
+              <>
+                {" "}
+                <a
+                  id={`${field.id}-link`}
+                  href={field.link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-700 underline underline-offset-2"
+                >
+                  {field.link.label}
+                </a>
+              </>
+            ) : null}
+          </div>
         </div>
       ) : (
         <>
@@ -67,9 +84,9 @@ const SubmitButton = (props: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
 );
 const ErrorSummary = ({ errors }: { errors: string[] }) =>
   errors.length === 0 ? null : (
-    <Alert className="mb-5">
+    <Alert className="mb-5 space-y-2">
       <p className="font-medium">Please correct the following:</p>
-      <ul className="mt-1 list-disc pl-5">
+      <ul className="list-disc space-y-1 pl-5 leading-6 wrap-break-word">
         {errors.map((error, index) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: Repeated error messages need distinct keys and these rows have no state.
           <li key={`${error}-${index}`}>{error}</li>

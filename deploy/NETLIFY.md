@@ -138,7 +138,7 @@ cron run:
 
 - `process-submission`.
 - `process-webhook-delivery`.
-- `drain-outbox` (`* * * * *`).
+- `drain-outbox` (`*/5 * * * *`).
 
 Sign in through GitHub, publish a form, submit a response, and inspect Submissions.
 Configure an owner-controlled public HTTPS webhook, submit again, and verify a

@@ -4,7 +4,8 @@ import {
   MAX_EMAIL_LENGTH,
   MAX_LONG_TEXT_LENGTH,
   MAX_SHORT_TEXT_LENGTH,
-  isFieldVisible,
+  getVisibleFields,
+  isSafeHttpUrl,
   normalizeSubmission,
   type FormField,
   type FormSchemaV1,
@@ -67,9 +68,27 @@ export const FormRenderer = ({
     handleSubmit,
     register,
     setError,
-  } = useForm<FormValues>({ defaultValues: {}, shouldUnregister: true });
+  } = useForm<FormValues>({
+    defaultValues: {},
+    mode: "all",
+    shouldUnregister: true,
+    resolver: (values) => {
+      const result = normalizeSubmission(schema, values);
+      return result.success
+        ? { errors: {}, values }
+        : {
+            errors: Object.fromEntries(
+              result.errors.map(({ field, message }) => [
+                field,
+                { type: "validate", message },
+              ]),
+            ),
+            values: {},
+          };
+    },
+  });
   const watched = useWatch({ control });
-  const watchedValues: Record<string, unknown> = { ...watched };
+  const visibleFields = getVisibleFields(schema, watched);
 
   const submit = handleSubmit(async (values) => {
     clearErrors();
@@ -120,19 +139,17 @@ export const FormRenderer = ({
   return (
     <form onSubmit={(event) => void submit(event)} noValidate>
       <ui.ErrorSummary errors={errorMessages} />
-      <div>
-        {schema.fields.map((field) =>
-          isFieldVisible(field, watchedValues) ? (
-            <RenderedField
-              key={field.id}
-              components={ui}
-              disabled={disabled || isSubmitting}
-              error={getFieldError(errors, field.key)}
-              field={field}
-              register={register}
-            />
-          ) : null,
-        )}
+      <div data-form-fields>
+        {visibleFields.map((field) => (
+          <RenderedField
+            key={field.id}
+            components={ui}
+            disabled={disabled || isSubmitting}
+            error={getFieldError(errors, field.key)}
+            field={field}
+            register={register}
+          />
+        ))}
       </div>
       <ui.SubmitButton type="submit" disabled={disabled || isSubmitting}>
         {isSubmitting ? "Submitting…" : schema.settings.submitLabel}
@@ -159,6 +176,9 @@ const RenderedField = ({
   const describedBy = [
     field.description === undefined ? undefined : `${field.id}-description`,
     error === undefined ? undefined : `${field.id}-error`,
+    field.type === "checkbox" && field.link && isSafeHttpUrl(field.link.url)
+      ? `${field.id}-link`
+      : undefined,
   ]
     .filter(Boolean)
     .join(" ");
@@ -170,6 +190,7 @@ const RenderedField = ({
     id: field.id,
   };
 
+  const registration = register(field.key);
   let control: React.ReactNode;
   switch (field.type) {
     case "longText":
@@ -181,13 +202,13 @@ const RenderedField = ({
             MAX_LONG_TEXT_LENGTH,
           )}
           placeholder={field.placeholder}
-          {...register(field.key)}
+          {...registration}
         />
       );
       break;
     case "select":
       control = (
-        <components.Select {...common} {...register(field.key)}>
+        <components.Select {...common} {...registration}>
           <option value="">{field.placeholder ?? "Select an option"}</option>
           {field.options.map((option) => (
             <option key={option.value} value={option.value}>
@@ -199,22 +220,17 @@ const RenderedField = ({
       break;
     case "checkbox":
       control = (
-        <components.Input
-          {...common}
-          type="checkbox"
-          {...register(field.key)}
-        />
+        <components.Input {...common} type="checkbox" {...registration} />
       );
       break;
     case "number":
       control = (
         <components.Input
           {...common}
-          type="number"
+          type="text"
+          inputMode="decimal"
           placeholder={field.placeholder}
-          {...register(field.key, {
-            setValueAs: (value: unknown) => (value === "" ? "" : Number(value)),
-          })}
+          {...registration}
         />
       );
       break;
@@ -225,7 +241,18 @@ const RenderedField = ({
           type="date"
           min={field.validation?.min}
           max={field.validation?.max}
-          {...register(field.key)}
+          {...registration}
+          onChange={(event) =>
+            void registration.onChange({
+              type: "change",
+              target: {
+                name: field.key,
+                value: event.currentTarget.validity.badInput
+                  ? "invalid-date"
+                  : event.currentTarget.value,
+              },
+            })
+          }
         />
       );
       break;
@@ -237,7 +264,7 @@ const RenderedField = ({
           autoComplete="email"
           maxLength={MAX_EMAIL_LENGTH}
           placeholder={field.placeholder}
-          {...register(field.key)}
+          {...registration}
         />
       );
       break;
@@ -251,7 +278,7 @@ const RenderedField = ({
             MAX_SHORT_TEXT_LENGTH,
           )}
           placeholder={field.placeholder}
-          {...register(field.key)}
+          {...registration}
         />
       );
       break;

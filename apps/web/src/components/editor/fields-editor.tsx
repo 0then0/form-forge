@@ -13,8 +13,10 @@ import {
   Input,
   Label,
   Select,
-  Textarea,
 } from "@form-forge/ui";
+import { Fragment } from "react";
+import { SelectOptionsEditor } from "./select-options-editor";
+
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 import {
   useFieldArray,
@@ -74,7 +76,7 @@ export const FieldsEditor = ({
   form: UseFormReturn<FormSchemaV1>;
 }) => {
   const { control, register, unregister } = form;
-  const { append, fields, move, remove, update } = useFieldArray({
+  const { insert, fields, move, remove, update } = useFieldArray({
     control,
     name: "fields",
     keyName: "editorKey",
@@ -94,7 +96,7 @@ export const FieldsEditor = ({
           disabled={!canEdit}
           size="sm"
           variant="secondary"
-          onClick={() => append(makeField("shortText"))}
+          onClick={() => insert(0, makeField("shortText"))}
         >
           <Plus className="size-4" /> Add field
         </Button>
@@ -110,170 +112,242 @@ export const FieldsEditor = ({
         const current = currentFields[index] ?? field;
         const earlierFields = currentFields.slice(0, index);
         return (
-          <Card key={field.editorKey}>
-            <CardContent className="space-y-4">
-              <div className="flex items-center gap-2">
-                <span className="flex size-7 items-center justify-center rounded bg-slate-100 text-xs font-medium">
-                  {index + 1}
-                </span>
-                <div className="ml-auto flex gap-1">
-                  <Button
-                    aria-label="Move field up"
-                    disabled={!canEdit || index === 0}
-                    size="icon"
-                    variant="ghost"
-                    onClick={() => move(index, index - 1)}
-                  >
-                    <ArrowUp className="size-4" />
-                  </Button>
-                  <Button
-                    aria-label="Move field down"
-                    disabled={!canEdit || index === fields.length - 1}
-                    size="icon"
-                    variant="ghost"
-                    onClick={() => move(index, index + 1)}
-                  >
-                    <ArrowDown className="size-4" />
-                  </Button>
-                  <Button
-                    aria-label="Remove field"
-                    disabled={!canEdit}
-                    size="icon"
-                    variant="ghost"
-                    onClick={() => remove(index)}
-                  >
-                    <Trash2 className="size-4 text-red-600" />
-                  </Button>
+          <Fragment key={field.editorKey}>
+            <Card>
+              <CardContent className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <span className="flex size-7 items-center justify-center rounded bg-slate-100 text-xs font-medium">
+                    {index + 1}
+                  </span>
+                  <div className="ml-auto flex gap-1">
+                    <Button
+                      aria-label="Move field up"
+                      disabled={!canEdit || index === 0}
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => move(index, index - 1)}
+                    >
+                      <ArrowUp className="size-4" />
+                    </Button>
+                    <Button
+                      aria-label="Move field down"
+                      disabled={!canEdit || index === fields.length - 1}
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => move(index, index + 1)}
+                    >
+                      <ArrowDown className="size-4" />
+                    </Button>
+                    <Button
+                      aria-label="Remove field"
+                      disabled={!canEdit}
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => remove(index)}
+                    >
+                      <Trash2 className="size-4 text-red-600" />
+                    </Button>
+                  </div>
                 </div>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor={`field-${index}-type`}>Type</Label>
-                  <Select
-                    id={`field-${index}-type`}
-                    disabled={!canEdit}
-                    value={current.type}
-                    onChange={(event) => {
-                      unregister(path(`fields.${index}.placeholder`));
-                      update(
-                        index,
-                        makeField(event.target.value as FieldType, current),
-                      );
-                    }}
-                  >
-                    {FIELD_TYPES.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor={`field-${index}-label`}>Label</Label>
-                  <Input
-                    id={`field-${index}-label`}
-                    disabled={!canEdit}
-                    {...register(path(`fields.${index}.label`))}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor={`field-${index}-key`}>Key</Label>
-                  <Input
-                    id={`field-${index}-key`}
-                    disabled={!canEdit}
-                    {...register(path(`fields.${index}.key`))}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor={`field-${index}-webhook`}>Webhook key</Label>
-                  <Input
-                    id={`field-${index}-webhook`}
-                    disabled={!canEdit}
-                    placeholder={current.key}
-                    {...register(path(`fields.${index}.webhookKey`))}
-                  />
-                </div>
-                <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor={`field-${index}-description`}>
-                    Help text
-                  </Label>
-                  <Input
-                    id={`field-${index}-description`}
-                    disabled={!canEdit}
-                    {...register(path(`fields.${index}.description`))}
-                  />
-                </div>
-                {"placeholder" in current ? (
-                  <div className="space-y-2 sm:col-span-2">
-                    <Label htmlFor={`field-${index}-placeholder`}>
-                      Placeholder
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor={`field-${index}-type`}>Type</Label>
+                    <Select
+                      id={`field-${index}-type`}
+                      disabled={!canEdit}
+                      value={current.type}
+                      onChange={(event) => {
+                        unregister(path(`fields.${index}.placeholder`));
+                        update(
+                          index,
+                          makeField(event.target.value as FieldType, current),
+                        );
+                      }}
+                    >
+                      {FIELD_TYPES.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor={`field-${index}-label`}>Label</Label>
+                    <Input
+                      id={`field-${index}-label`}
+                      disabled={!canEdit}
+                      {...register(path(`fields.${index}.label`))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor={`field-${index}-key`}>Key</Label>
+                    <Input
+                      id={`field-${index}-key`}
+                      disabled={!canEdit}
+                      {...register(path(`fields.${index}.key`))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor={`field-${index}-webhook`}>
+                      Webhook key
                     </Label>
                     <Input
-                      id={`field-${index}-placeholder`}
+                      id={`field-${index}-webhook`}
                       disabled={!canEdit}
-                      {...register(path(`fields.${index}.placeholder`))}
+                      placeholder={current.key}
+                      {...register(path(`fields.${index}.webhookKey`))}
                     />
                   </div>
-                ) : null}
-                {current.type === "select" ? (
                   <div className="space-y-2 sm:col-span-2">
-                    <Label htmlFor={`field-${index}-options`}>
-                      Options, one per line as label=value
+                    <Label htmlFor={`field-${index}-description`}>
+                      Help text
                     </Label>
-                    <Textarea
-                      id={`field-${index}-options`}
+                    <Input
+                      id={`field-${index}-description`}
                       disabled={!canEdit}
-                      value={current.options
-                        .map((option) => `${option.label}=${option.value}`)
-                        .join("\n")}
-                      onChange={(event) => {
-                        const options = event.target.value
-                          .split("\n")
-                          .filter(Boolean)
-                          .map((line) => {
-                            const [label = "", value = label] = line.split("=");
-                            return { label: label.trim(), value: value.trim() };
-                          });
-                        update(index, { ...current, options });
-                      }}
+                      {...register(path(`fields.${index}.description`))}
                     />
                   </div>
-                ) : null}
-                <div className="space-y-2">
-                  <Label htmlFor={`field-${index}-width`}>Width</Label>
-                  <Select
-                    id={`field-${index}-width`}
-                    disabled={!canEdit}
-                    {...register(path(`fields.${index}.width`))}
-                  >
-                    <option value="full">Full</option>
-                    <option value="half">Half</option>
-                  </Select>
-                </div>
-                <label className="flex items-center gap-2 self-end py-2 text-sm font-medium">
-                  <input
-                    type="checkbox"
-                    disabled={!canEdit}
-                    {...register(path(`fields.${index}.required`))}
+                  {"placeholder" in current ? (
+                    <div className="space-y-2 sm:col-span-2">
+                      <Label htmlFor={`field-${index}-placeholder`}>
+                        Placeholder
+                      </Label>
+                      <Input
+                        id={`field-${index}-placeholder`}
+                        disabled={!canEdit}
+                        {...register(path(`fields.${index}.placeholder`))}
+                      />
+                    </div>
+                  ) : null}
+                  {current.type === "checkbox" ? (
+                    <fieldset
+                      className="space-y-3 sm:col-span-2"
+                      disabled={!canEdit}
+                    >
+                      <legend className="text-sm font-medium">
+                        Agreement link (optional)
+                      </legend>
+                      {current.link ? (
+                        <>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label htmlFor={`field-${index}-link-label`}>
+                                Link text
+                              </Label>
+                              <Input
+                                id={`field-${index}-link-label`}
+                                maxLength={120}
+                                {...register(
+                                  path(`fields.${index}.link.label`),
+                                )}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor={`field-${index}-link-url`}>
+                                Link URL
+                              </Label>
+                              <Input
+                                id={`field-${index}-link-url`}
+                                type="url"
+                                placeholder="https://example.com/terms"
+                                maxLength={2048}
+                                {...register(path(`fields.${index}.link.url`))}
+                              />
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={!canEdit}
+                            onClick={() => {
+                              unregister(path(`fields.${index}.link`));
+                              form.setValue(
+                                path(`fields.${index}.link`),
+                                undefined,
+                                { shouldDirty: true },
+                              );
+                            }}
+                          >
+                            Remove link
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={!canEdit}
+                          onClick={() =>
+                            form.setValue(
+                              path(`fields.${index}.link`),
+                              { label: "Terms of service", url: "" },
+                              { shouldDirty: true },
+                            )
+                          }
+                        >
+                          <Plus className="size-4" /> Add link
+                        </Button>
+                      )}
+                    </fieldset>
+                  ) : null}
+                  {current.type === "select" ? (
+                    <SelectOptionsEditor
+                      key={
+                        // biome-ignore lint/suspicious/noArrayIndexKey: The nested field array must remount when its registration path changes after reordering.
+                        `${field.editorKey}-${index}`
+                      }
+                      canEdit={canEdit}
+                      form={form}
+                      index={index}
+                    />
+                  ) : null}
+                  <div className="space-y-2">
+                    <Label htmlFor={`field-${index}-width`}>Width</Label>
+                    <Select
+                      id={`field-${index}-width`}
+                      disabled={!canEdit}
+                      {...register(path(`fields.${index}.width`))}
+                    >
+                      <option value="full">Full</option>
+                      <option value="half">Half</option>
+                    </Select>
+                  </div>
+                  <label className="flex items-center gap-2 self-end py-2 text-sm font-medium">
+                    <input
+                      type="checkbox"
+                      disabled={!canEdit}
+                      {...register(path(`fields.${index}.required`))}
+                    />
+                    Required
+                  </label>
+                  <FieldValidation
+                    canEdit={canEdit}
+                    field={current}
+                    index={index}
+                    update={(nextField) => update(index, nextField)}
                   />
-                  Required
-                </label>
-                <FieldValidation
+                </div>
+
+                <VisibilityRules
                   canEdit={canEdit}
                   field={current}
-                  index={index}
+                  sourceFields={earlierFields}
                   update={(nextField) => update(index, nextField)}
                 />
-              </div>
-
-              <VisibilityRules
-                canEdit={canEdit}
-                field={current}
-                sourceFields={earlierFields}
-                update={(nextField) => update(index, nextField)}
-              />
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+            <div className="flex justify-center">
+              <Button
+                disabled={!canEdit}
+                size="sm"
+                variant="secondary"
+                aria-label={`Add field after field ${index + 1}`}
+                onClick={() => insert(index + 1, makeField("shortText"))}
+              >
+                <Plus className="size-4" /> Add field
+              </Button>
+            </div>
+          </Fragment>
         );
       })}
     </>

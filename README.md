@@ -11,10 +11,13 @@ Form Forge is a schema-first, headless form platform. Define a form, publish an 
 
 Form Forge is a self-hosted application, not a drag-and-drop builder or a managed service. Its focus is explicit contracts, versioned data, reliable background delivery, and a usable administration interface.
 
+Form Forge is free/libre and open-source software under Apache 2.0. It includes no product analytics or advertising trackers and sends no usage reports to the project authors. Submission values and source metadata are stored in your own database; optional Sentry error and performance reporting is configured by the deployment owner.
+
 ## Features
 
 - Schema editor with a live preview, validation, and conditional field visibility.
 - Short text, long text, email, number, select, checkbox, and date fields.
+- Optional checkbox agreement links with separate link text and HTTP/HTTPS URL.
 - Editable drafts, immutable published versions, version comparison, and restoration into a new draft revision.
 - Hosted forms and iframe embedding.
 - Version-aware, idempotent submissions with UTM and visitor fingerprint metadata.
@@ -22,6 +25,44 @@ Form Forge is a self-hosted application, not a drag-and-drop builder or a manage
 - Signed webhooks, automatic retries, manual recovery, and endpoint management: edit, disable, enable, archive, and rotate secrets.
 - Workspace roles: owner, editor, and viewer.
 - System, light, and dark themes.
+- GitHub, Google, Apple, GitLab, and ChatGPT sign-in with account linking.
+- Form archive, restoration, and owner-only permanent deletion.
+
+## Sign-in methods and account linking
+
+GitHub remains the required default provider. Enable additional providers by setting
+both `AUTH_<PROVIDER>_ID` and `AUTH_<PROVIDER>_SECRET` (`GOOGLE`, `APPLE`, `GITLAB`,
+`CHATGPT`). Unconfigured methods are shown as unavailable. Register these exact callback paths
+under your `NEXTAUTH_URL` origin:
+
+- `/api/auth/callback/github`
+- `/api/auth/callback/google`
+- `/api/auth/callback/apple`
+- `/api/auth/callback/gitlab`
+- `/api/auth/callback/chatgpt`
+
+Apple requires a Services ID, a signed client-secret JWT that must be rotated before
+expiry, and an HTTPS callback. With Apple enabled on HTTPS, session and OAuth check
+cookies use `Secure; SameSite=None` so Apple's `form_post` callback can verify the
+transaction and preserve the signed-in account during linking. NextAuth CSRF protections
+remain enabled, and admin mutations reject cross-origin browser requests.
+ChatGPT uses the official OpenID Connect discovery endpoint with PKCE, state and nonce.
+Its confidential OAuth client must be registered with `client_secret_post` authentication.
+Website sign-in is currently a limited trial for approved OpenAI partners; an ordinary
+OpenAI API key is not a sign-in client. See [the official website integration guide](https://developers.openai.com/siwc/website).
+
+Open **Account** from the header and confirm **Link** for another sign-in method.
+NextAuth attaches the verified provider account to the current user, preserving the
+same user ID and workspace memberships. Email matches never automatically merge
+accounts. When an email is already registered, sign in with the original method first.
+A provider identity already attached to a different user cannot be transferred or
+merged by this flow. Linking does not change the account's original profile/email.
+
+Archived forms are available under **Forms → Archived**. Open a form to review its saved draft, all field names and published version history in a read-only view. Restoring a previously
+published form makes its existing public URL available again. Workspace owners can
+permanently delete an archived form after typing its name; this removes its versions,
+submissions, webhook endpoints, delivery history and queued outbox events. Audit logs
+and consumed usage reservations remain. Background processing and in-flight webhook deliveries must finish first.
 
 ## Getting started
 
@@ -125,7 +166,7 @@ npx --ignore-scripts=false inngest-cli@latest dev \
 
 This runs the standalone CLI without adding a workspace dependency. Its dashboard is available at `http://localhost:8288`.
 
-Both processes are needed to exercise webhook delivery. Submissions are persisted immediately; background processing is asynchronous and the outbox is dispatched by a job that runs once a minute. Without Inngest, responses remain stored, but background delivery does not run.
+Both processes are needed to exercise webhook delivery. Submissions are persisted immediately; background processing is asynchronous and the outbox is dispatched by a job that runs every five minutes (`*/5 * * * *`): 288 scheduled runs per day, or 8,640 over 30 days, excluding retries. A new submission and its webhook delivery pass through separate outbox stages, so initial delivery can wait for two cron ticks (up to roughly 10 minutes before queue or transport delays). Without Inngest, responses remain stored, but background delivery does not run.
 
 ### 7. Create your first form
 
@@ -203,7 +244,7 @@ Verify the signature with the endpoint secret using HMAC-SHA256 over `<timestamp
 
 Return a `2xx` response to acknowledge delivery. Requests have a 10-second timeout. Retryable failures are retried automatically within an initial budget of five attempts; an authorized manual retry increases the total attempt budget by five. Configuration failures can require correction before retrying. Attempts and errors remain visible in the application.
 
-Delivery is **at-least-once**. Consumers must deduplicate by `X-Form-Forge-Id`, including manual retries of the same delivery. Recovery jobs reclaim expired worker leases and requeue submissions whose delivery creation did not complete. Retry timing is driven by persisted scheduling and the minute-based background job, not immediate execution.
+Delivery is **at-least-once**. Consumers must deduplicate by `X-Form-Forge-Id`, including manual retries of the same delivery. Recovery jobs reclaim expired worker leases and requeue submissions whose delivery creation did not complete. Retry timing is driven by persisted scheduling and the five-minute background job, not immediate execution.
 
 ## Workspace access
 
@@ -331,7 +372,7 @@ Set `APP_URL`, `NEXTAUTH_URL`, and `NEXT_PUBLIC_APP_URL` to the same public HTTP
 
 For self-hosted deployments, the application must be reachable only through a trusted HTTPS ingress. Do not expose its origin port publicly. The ingress must discard any incoming `X-Form-Forge-Client-IP` and replace it with the actual client IP, not append to it. For an Nginx ingress directly facing clients, the relevant setting is `proxy_set_header X-Form-Forge-Client-IP $remote_addr;`. If another trusted proxy precedes Nginx, configure its trusted-address chain before using `$remote_addr`. Also enforce request-body sizes, read timeouts, connection limits, and request limits at ingress; application quotas do not replace network-level protection. On Netlify, the platform provides the trusted ingress and its own client IP header; see the Netlify guide for configuration and platform limits.
 
-Before updating an existing installation, back up the database and secrets, archive any endpoints exceeding the five-per-form cap, stop application writes and workers, then run `pnpm db:migrate`. Migration `0005` is additive and initializes today's reservations from existing submissions and their endpoint snapshots. Build with the target public URL, start with `pnpm start`, register `/api/inngest`, and confirm that all three functions, including the minute-based recovery job, are active before resuming traffic. Keep migrations out of per-instance startup. Roll back application code only to a version compatible with the applied schema; do not delete migration history or drop tables to roll back.
+Before updating an existing installation, back up the database and secrets, archive any endpoints exceeding the five-per-form cap, stop application writes and workers, then run `pnpm db:migrate`. Migration `0005` is additive and initializes today's reservations from existing submissions and their endpoint snapshots. Build with the target public URL, start with `pnpm start`, register `/api/inngest`, and confirm that all three functions, including the five-minute recovery job, are active before resuming traffic. Keep migrations out of per-instance startup. Roll back application code only to a version compatible with the applied schema; do not delete migration history or drop tables to roll back.
 
 For Docker Compose installations, use the [three-store backup procedure](deploy/README.md#backup-and-isolated-restore), including scheduler storage and keys. For other hosting environments, use PostgreSQL backups appropriate to the installation. The following commands cover only the application database:
 
@@ -343,7 +384,7 @@ pg_restore --dbname=form_forge_restore --no-owner form-forge.dump
 
 Run restore rehearsals on an isolated PostgreSQL instance, never over the live database. Restrict and encrypt backup storage because dumps contain personal data. Restore the corresponding secret-store keys too, and verify published schemas, submission counts, and endpoint-secret decryption before relying on a backup. Schedule backups and test restores, rather than treating a successful dump as proof of recovery.
 
-The recovery job logs a warning and sends a Sentry warning when outbox tasks or deliveries are overdue by more than 15 minutes. Scheduled future retries are not flagged. Configure `SENTRY_DSN` and an alert for this warning and unhandled server errors; diagnostics contain counts rather than submission values. Monitor failed or missing Inngest cron runs as well: a stopped scheduler cannot report its own backlog. Start by measuring queue age and throughput; the current dispatcher sends up to 50 outbox events per minute.
+The recovery job logs a warning and sends a Sentry warning when outbox tasks or deliveries are overdue by more than 15 minutes. Scheduled future retries are not flagged. Configure `SENTRY_DSN` and an alert for this warning and unhandled server errors; diagnostics contain counts rather than submission values. Monitor failed or missing Inngest cron runs as well: a stopped scheduler cannot report its own backlog. Start by measuring queue age and throughput; the current dispatcher sends up to 50 outbox events per five-minute run.
 
 ## Scope and limitations
 

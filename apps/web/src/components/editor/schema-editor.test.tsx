@@ -372,9 +372,7 @@ describe("SchemaEditor", () => {
 
       await waitFor(() =>
         expect(
-          screen.queryByText(
-            "Preview is unavailable until the schema is valid.",
-          ),
+          screen.queryByText("Complete these details to see the preview"),
         ).not.toBeInTheDocument(),
       );
       expect(screen.queryByLabelText("Placeholder")).not.toBeInTheDocument();

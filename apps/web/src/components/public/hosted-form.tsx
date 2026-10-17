@@ -135,7 +135,7 @@ export const HostedForm = ({
       ) : (
         <div className="mb-7" />
       )}
-      <div className="[&_form>button]:mt-7 [&_form>div]:grid [&_form>div]:gap-5 [&_form>div]:sm:grid-cols-2">
+      <div className="[&_form>button]:mt-7 [&_form>[data-form-fields]]:grid [&_form>[data-form-fields]]:gap-5 [&_form>[data-form-fields]]:sm:grid-cols-2">
         <FormRenderer
           components={webRendererComponents}
           schema={schema}

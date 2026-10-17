@@ -159,7 +159,7 @@ The application readiness check tests PostgreSQL connectivity, the exact latest
 committed migration hash and a rendered HTTP route. It does not prove pipeline
 health. Inngest's own healthcheck only proves its HTTP surfaces are responding.
 
-### Verify registration and the minute cron
+### Verify registration and the five-minute cron
 
 Inngest polls the internal serve URL every 30 seconds. The app uses
 `INNGEST_DEV=0`, `INNGEST_BASE_URL=http://inngest:8288`, the matching event/signing
@@ -180,7 +180,7 @@ JS
 ```
 
 Require `form-forge-process-submission`, `form-forge-process-webhook-delivery`,
-and `form-forge-drain-outbox`, with cron `* * * * *`. Wait for an actual completed
+and `form-forge-drain-outbox`, with cron `*/5 * * * *`. Wait for an actual completed
 `drain-outbox` run. Registration and a healthy process alone are insufficient.
 Do not invoke internal recovery functions manually in an acceptance drill.
 
@@ -233,7 +233,7 @@ images for the same public hostname before the maintenance window.
 1. Schedule downtime, stop ingress/writes and workers, and take the backup below.
 2. With PostgreSQL available and workers stopped, run the new `dc run --rm migrate`.
 3. Start Redis, application, scheduler and ingress with `dc up -d --wait`.
-4. Verify all three functions, an actual completed minute cron and a synthetic
+4. Verify all three functions, an actual completed five-minute cron and a synthetic
    delivery before resuming client traffic. `up --wait` alone is insufficient.
 
 For a same-release recreation drill, `dc stop; dc up -d --force-recreate --wait`
@@ -313,7 +313,7 @@ restored scheduler directories/history before starting Inngest; application outb
 recovery is not evidence that scheduler archives were restored.
 
 Then run `restore_dc up -d --wait`, verify the same registered function identities,
-new completed minute cron runs, and real HTTPS delivery under restored logical IDs.
+new completed five-minute cron runs, and real HTTPS delivery under restored logical IDs.
 A due retry may already be overdue: application cron dispatches the stored outbox
 and repairs due deliveries, rather than preserving a future Inngest sleep for each
 application retry.
@@ -332,7 +332,7 @@ observation is not a guarantee of no HTTP replay forever.
 
 Application outbox recovery also repairs incomplete processing: pending/failed
 events retry; sent submissions without deliveries can be requeued after five
-minutes; expired 60-second worker leases are recovered by the minute cron. Outbox
+minutes; expired 60-second worker leases are recovered by the five-minute cron. Outbox
 dispatch backs off from one minute to one hour and sends up to 50 events per cron
 run. Delivery retry delays are 1 minute, 5 minutes, 30 minutes and 2 hours, within
 five initial attempts. Recovery may take several ticks and is not instantaneous.

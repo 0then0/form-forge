@@ -5,14 +5,22 @@ import {
   formSchemaV1Schema,
   type FormSchemaV1,
 } from "@form-forge/form-schema";
-import { and, desc, eq, lt, max, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, max, ne, or } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { cache } from "react";
 import { z } from "zod";
 
 import { requireWorkspace } from "@/auth/permissions";
 import { db } from "@/db/client";
-import { auditLogs, forms, formVersions } from "@/db/schema";
+import {
+  auditLogs,
+  forms,
+  formVersions,
+  outboxEvents,
+  submissions,
+  webhookDeliveries,
+  webhookEndpoints,
+} from "@/db/schema";
 import { AppError, notFoundError } from "@/lib/errors";
 import { requireUuidParam } from "@/lib/route-params";
 import { slugify } from "@/lib/slug";
@@ -43,8 +51,28 @@ const assertDraftRevision = (actual: Date, expected: string) => {
 const nextDraftRevision = (current: Date): Date =>
   new Date(Math.max(Date.now(), current.getTime() + 1));
 
-export const listActiveForms = async (workspaceSlug: string) => {
+const listForms = async (workspaceSlug: string, archived: boolean) => {
   const workspace = await requireWorkspace(workspaceSlug);
+  const lastSaves = db
+    .select({
+      formId: auditLogs.resourceId,
+      savedAt: max(auditLogs.createdAt).as("saved_at"),
+    })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.workspaceId, workspace.id),
+        eq(auditLogs.resourceType, "form"),
+        inArray(auditLogs.action, [
+          "form.created",
+          "form.draft_saved",
+          "form.published",
+          "form.version_restored",
+        ]),
+      ),
+    )
+    .groupBy(auditLogs.resourceId)
+    .as("last_saves");
   const rows = await db
     .select({
       id: forms.id,
@@ -53,13 +81,36 @@ export const listActiveForms = async (workspaceSlug: string) => {
       status: forms.status,
       publishedVersionId: forms.publishedVersionId,
       updatedAt: forms.updatedAt,
+      archivedAt: forms.archivedAt,
+      lastSavedAt: lastSaves.savedAt,
     })
     .from(forms)
+    .leftJoin(lastSaves, eq(lastSaves.formId, forms.id))
     .where(
-      and(eq(forms.workspaceId, workspace.id), ne(forms.status, "archived")),
+      and(
+        eq(forms.workspaceId, workspace.id),
+        archived ? eq(forms.status, "archived") : ne(forms.status, "archived"),
+      ),
     )
     .orderBy(desc(forms.updatedAt));
   return rows;
+};
+
+export const listActiveForms = (workspaceSlug: string) =>
+  listForms(workspaceSlug, false);
+export const listArchivedForms = (workspaceSlug: string) =>
+  listForms(workspaceSlug, true);
+
+export const publishSavedDraft = async (
+  workspaceSlug: string,
+  formId: string,
+  expectedRevision: string,
+) => {
+  const form = await getForm(workspaceSlug, formId);
+  return publishForm(workspaceSlug, formId, {
+    expectedRevision,
+    schema: form.draftSchema,
+  });
 };
 
 export const createForm = async (workspaceSlug: string, name: string) => {
@@ -91,18 +142,26 @@ export const createForm = async (workspaceSlug: string, name: string) => {
   });
 };
 
-export const getForm = cache(async (workspaceSlug: string, formId: string) => {
-  const validFormId = requireUuidParam(formId, "form ID");
-  const workspace = await requireWorkspace(workspaceSlug);
-  const [form] = await db
-    .select()
-    .from(forms)
-    .where(and(eq(forms.id, validFormId), eq(forms.workspaceId, workspace.id)))
-    .limit(1);
-  if (!form || form.status === "archived")
-    throw notFoundError("Form not found");
+export const getFormForViewing = cache(
+  async (workspaceSlug: string, formId: string) => {
+    const validFormId = requireUuidParam(formId, "form ID");
+    const workspace = await requireWorkspace(workspaceSlug);
+    const [form] = await db
+      .select()
+      .from(forms)
+      .where(
+        and(eq(forms.id, validFormId), eq(forms.workspaceId, workspace.id)),
+      )
+      .limit(1);
+    if (!form) throw notFoundError("Form not found");
+    return { ...form, draftSchema: formSchemaV1Schema.parse(form.draftSchema) };
+  },
+);
 
-  return { ...form, draftSchema: formSchemaV1Schema.parse(form.draftSchema) };
+export const getForm = cache(async (workspaceSlug: string, formId: string) => {
+  const form = await getFormForViewing(workspaceSlug, formId);
+  if (form.status === "archived") throw notFoundError("Form not found");
+  return form;
 });
 
 export const saveDraft = async (
@@ -252,7 +311,7 @@ export const listFormVersions = async (
   cursor?: number,
 ) => {
   const validFormId = requireUuidParam(formId, "form ID");
-  await getForm(workspaceSlug, validFormId);
+  await getFormForViewing(workspaceSlug, validFormId);
   const limit = 10;
   const rows = await db
     .select({
@@ -385,5 +444,160 @@ export const archiveForm = async (workspaceSlug: string, formId: string) => {
       workspaceId: workspace.id,
     });
     return archived;
+  });
+};
+
+export const restoreArchivedForm = async (
+  workspaceSlug: string,
+  formId: string,
+) => {
+  const validFormId = requireUuidParam(formId, "form ID");
+  const workspace = await requireWorkspace(workspaceSlug, "editor");
+  return db.transaction(async (tx) => {
+    const [form] = await tx
+      .select()
+      .from(forms)
+      .where(
+        and(eq(forms.id, validFormId), eq(forms.workspaceId, workspace.id)),
+      )
+      .limit(1)
+      .for("update");
+    if (form?.status !== "archived")
+      throw notFoundError("Archived form not found");
+    const [restored] = await tx
+      .update(forms)
+      .set({
+        archivedAt: null,
+        status: form.publishedVersionId ? "published" : "draft",
+        updatedAt: nextDraftRevision(form.updatedAt),
+      })
+      .where(eq(forms.id, validFormId))
+      .returning({ id: forms.id, status: forms.status });
+    await tx.insert(auditLogs).values({
+      action: "form.unarchived",
+      actorId: workspace.user.id,
+      metadata: {},
+      resourceId: validFormId,
+      resourceType: "form",
+      workspaceId: workspace.id,
+    });
+    return restored;
+  });
+};
+
+export const permanentlyDeleteForm = async (
+  workspaceSlug: string,
+  formId: string,
+  confirmation: string,
+) => {
+  const validFormId = requireUuidParam(formId, "form ID");
+  const workspace = await requireWorkspace(workspaceSlug, "owner");
+  return db.transaction(async (tx) => {
+    const [form] = await tx
+      .select()
+      .from(forms)
+      .where(
+        and(eq(forms.id, validFormId), eq(forms.workspaceId, workspace.id)),
+      )
+      .limit(1)
+      .for("update");
+    if (!form) throw notFoundError("Form not found");
+    if (form.status !== "archived")
+      throw new AppError(
+        "CONFLICT",
+        "Archive the form before deleting it permanently",
+        409,
+      );
+    if (confirmation !== form.name)
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Enter the form name to confirm permanent deletion",
+        422,
+      );
+    // Delivery creation locks submissions; sending locks endpoints. Do not wait
+    // while holding either side of that graph, or a worker can deadlock deletion.
+    try {
+      await tx
+        .select({ id: submissions.id })
+        .from(submissions)
+        .where(eq(submissions.formId, validFormId))
+        .for("update", { noWait: true });
+      await tx
+        .select({ id: webhookEndpoints.id })
+        .from(webhookEndpoints)
+        .where(eq(webhookEndpoints.formId, validFormId))
+        .for("update", { noWait: true });
+    } catch (error) {
+      const cause = error instanceof Error && error.cause ? error.cause : error;
+      if (
+        typeof cause === "object" &&
+        cause !== null &&
+        "code" in cause &&
+        cause.code === "55P03"
+      )
+        throw new AppError(
+          "CONFLICT",
+          "Background processing is using this form. Wait for it to finish before deleting the form.",
+          409,
+        );
+      throw error;
+    }
+    const submissionIds = tx
+      .select({ id: submissions.id })
+      .from(submissions)
+      .where(eq(submissions.formId, validFormId));
+    const deliveryIds = tx
+      .select({ id: webhookDeliveries.id })
+      .from(webhookDeliveries)
+      .where(inArray(webhookDeliveries.submissionId, submissionIds));
+    const [active] = await tx
+      .select({ id: webhookDeliveries.id })
+      .from(webhookDeliveries)
+      .where(
+        and(
+          inArray(webhookDeliveries.submissionId, submissionIds),
+          eq(webhookDeliveries.status, "processing"),
+        ),
+      )
+      .limit(1);
+    if (active)
+      throw new AppError(
+        "CONFLICT",
+        "A webhook delivery is still processing. Wait for it to finish before deleting the form.",
+        409,
+      );
+    await tx
+      .delete(outboxEvents)
+      .where(
+        or(
+          and(
+            eq(outboxEvents.type, "submission.received"),
+            inArray(outboxEvents.aggregateId, submissionIds),
+          ),
+          and(
+            inArray(outboxEvents.type, [
+              "delivery.requested",
+              "delivery.retry_requested",
+            ]),
+            inArray(outboxEvents.aggregateId, deliveryIds),
+          ),
+        ),
+      );
+    await tx.delete(submissions).where(eq(submissions.formId, validFormId));
+    // Break the published-version reference before cascading form versions.
+    await tx
+      .update(forms)
+      .set({ publishedVersionId: null })
+      .where(eq(forms.id, validFormId));
+    await tx.delete(forms).where(eq(forms.id, validFormId));
+    await tx.insert(auditLogs).values({
+      action: "form.deleted",
+      actorId: workspace.user.id,
+      metadata: { name: form.name },
+      resourceId: validFormId,
+      resourceType: "form",
+      workspaceId: workspace.id,
+    });
+    return { id: validFormId };
   });
 };

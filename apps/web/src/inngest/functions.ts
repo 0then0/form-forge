@@ -44,7 +44,7 @@ export const drainOutbox = inngest.createFunction(
   {
     id: "drain-outbox",
     retries: 2,
-    triggers: cron("* * * * *"),
+    triggers: cron("*/5 * * * *"),
   },
   async ({ step }) => {
     await step.run("expire-usage-buckets", () => removeExpiredUsage());

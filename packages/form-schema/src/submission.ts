@@ -24,8 +24,7 @@ const valueIsMissing = (value: unknown): boolean =>
   value === undefined ||
   value === null ||
   value === "" ||
-  (typeof value === "string" && value.trim() === "") ||
-  (typeof value === "number" && Number.isNaN(value));
+  (typeof value === "string" && value.trim() === "");
 
 const validateField = (
   field: FormField,
@@ -81,8 +80,8 @@ const validateField = (
     case "email": {
       if (
         typeof value !== "string" ||
-        value.length > MAX_EMAIL_LENGTH ||
-        !emailSchema.safeParse(value).success
+        value.trim().length > MAX_EMAIL_LENGTH ||
+        !emailSchema.safeParse(value.trim()).success
       ) {
         return { field: field.key, message: "Enter a valid email address" };
       }
@@ -92,7 +91,8 @@ const validateField = (
       const normalized =
         typeof value === "number"
           ? value
-          : typeof value === "string" && value.trim() !== ""
+          : typeof value === "string" &&
+              /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(value.trim())
             ? Number(value)
             : Number.NaN;
       if (!Number.isFinite(normalized)) {
@@ -155,6 +155,23 @@ const validateField = (
       return value;
     }
   }
+};
+
+export const getVisibleFields = (
+  schema: FormSchemaV1,
+  values: Record<string, unknown>,
+): FormField[] => {
+  const visible: FormField[] = [];
+  const received: Record<string, NormalizedSubmissionValue> = {};
+  for (const field of schema.fields) {
+    if (!isFieldVisible(field, received)) continue;
+    visible.push(field);
+    const value = validateField(field, values[field.key]);
+    if (typeof value !== "object" && !valueIsMissing(values[field.key])) {
+      received[field.key] = value;
+    }
+  }
+  return visible;
 };
 
 export const normalizeSubmission = (

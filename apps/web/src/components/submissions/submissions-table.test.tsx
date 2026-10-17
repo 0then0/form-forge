@@ -66,6 +66,7 @@ test("renders submission cells, appends pages and applies server filters to CSV 
   const row = first.closest("tr");
   expect(row).not.toBeNull();
   if (!row) throw new Error("Submission link must be inside a table row");
+  expect(within(row).getAllByRole("link")).toHaveLength(1);
   expect(within(row).getByText("v2")).toBeVisible();
   expect(within(row).getByText("name: Ada · subscribed: true")).toBeVisible();
   expect(within(row).getByText("succeeded")).toBeVisible();

@@ -90,7 +90,7 @@ def quote(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def wait(label, probe, timeout=360):
+def wait(label, probe, timeout=720):
     print(f"Waiting: {label}", flush=True)
     deadline = time.monotonic() + timeout
     last_error = None
@@ -610,7 +610,7 @@ commit;""")
         ) == [{"spoofed": False}]
         report["clientIpSpoofRejected"] = True
         dc("start", "inngest")
-        wait("outage recovery by minute cron", lambda: completed(submission))
+        wait("outage recovery by five-minute cron", lambda: completed(submission))
         save_scenario("A_scheduler_outage", submission, started, atomic)
 
         if not args.cold_restore_only:
@@ -1147,7 +1147,7 @@ commit;""")
         fresh_crons = wait(
             "two additional completed recovery ticks without completed-delivery replay",
             observed_two_ticks,
-            timeout=240,
+            timeout=720,
         )
         cold["completedObservation"] = {
             "delivery": completed_delivery,
@@ -1225,7 +1225,7 @@ commit;""")
         )
         cold["scheduling"] = {
             "retryDueAt": retry_pending["next_attempt_at"],
-            "mechanism": "application pending outbox/due-delivery recovery via real minute cron; no pre-created Inngest sleeping retry claimed",
+            "mechanism": "application pending outbox/due-delivery recovery via real five-minute cron; no pre-created Inngest sleeping retry claimed",
         }
         # Signed SDK invocations completed the real application functions; these
         # assertions combine signature rejection with persisted HTTPS/HMAC results.

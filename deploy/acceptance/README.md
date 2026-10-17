@@ -71,7 +71,7 @@ Repeat these bounded drills, observing database and receiver state rather than
 using elapsed sleeps as proof:
 
 1. Stop only `dc stop inngest`, submit, confirm one submission and pending outbox
-   atomically, then `dc start inngest`. Wait for a completed minute cron and
+   atomically, then `dc start inngest`. Wait for a completed five-minute cron and
    successful delivery. Do not invoke recovery functions manually.
 2. Use `/retry`, observe HTTP 503 attempt and `next_attempt_at`, then allow the
    unchanged scheduler to retry. Expect a 200 under the same delivery ID.

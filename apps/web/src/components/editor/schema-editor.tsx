@@ -364,10 +364,13 @@ const EditorSidebar = ({
   const serializedSchema = JSON.stringify(deferredSchema);
 
   return (
-    <aside className="xl:sticky xl:top-6 xl:self-start">
+    <aside
+      aria-label="Form preview and settings"
+      className="min-w-0 xl:sticky xl:top-6 xl:max-h-[calc(100dvh-3rem)] xl:self-start xl:overflow-y-auto xl:overscroll-contain xl:pr-2"
+    >
       <div className="space-y-5">
         <PreviewErrorBoundary resetKey={serializedSchema}>
-          <SchemaPreview result={parsedSchema} />
+          <SchemaPreview result={parsedSchema} draft={deferredSchema} />
         </PreviewErrorBoundary>
         {published ? (
           <Card>

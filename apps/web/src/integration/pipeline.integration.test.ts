@@ -20,6 +20,7 @@ vi.mock("@/auth/session", () => ({
 
 import { db } from "@/db/client";
 import {
+  auditLogs,
   deliveryAttempts,
   forms,
   formVersions,
@@ -41,6 +42,13 @@ import {
   requestManualRetry,
 } from "@/services/deliveries";
 import {
+  getForm,
+  getFormForViewing,
+  archiveForm,
+  permanentlyDeleteForm,
+  restoreArchivedForm,
+  listArchivedForms,
+  publishSavedDraft,
   createForm,
   listFormVersions,
   publishForm,
@@ -53,7 +61,7 @@ import {
   enqueueDueDeliveries,
   enqueueUnprocessedSubmissions,
 } from "@/services/outbox";
-import { receiveSubmission } from "@/services/public-forms";
+import { getPublishedForm, receiveSubmission } from "@/services/public-forms";
 import {
   consumeUsage,
   limitSubmitRequest,
@@ -180,6 +188,419 @@ integration("submission and delivery pipeline", () => {
       sql`truncate table usage_buckets, outbox_events, users, workspaces cascade`,
     );
   });
+
+  test("allows private read-only access to archived schemas and versions without reopening mutations or public access", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const formSchema: FormSchemaV1 = {
+      ...schema(),
+      fields: [
+        {
+          id: crypto.randomUUID(),
+          key: "consent",
+          label: "I accept",
+          type: "checkbox",
+          width: "full",
+          required: true,
+          link: { label: "Terms", url: "https://example.com/terms" },
+        },
+      ],
+    };
+    const created = await createForm(workspace.slug, "Archived agreement");
+    const published = await publishForm(workspace.slug, created.id, {
+      expectedRevision: created.updatedAt.toISOString(),
+      schema: formSchema,
+    });
+    await archiveForm(workspace.slug, created.id);
+    const archived = await getFormForViewing(workspace.slug, created.id);
+    expect(archived.status).toBe("archived");
+    expect(archived.draftSchema.fields[0]).toMatchObject({
+      link: { label: "Terms", url: "https://example.com/terms" },
+    });
+    expect(
+      (await listFormVersions(workspace.slug, created.id)).data[0]?.id,
+    ).toBe(published.id);
+    await expect(getForm(workspace.slug, created.id)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await expect(getPublishedForm(created.slug)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    const input = {
+      expectedRevision: archived.updatedAt.toISOString(),
+      schema: formSchema,
+    };
+    await expect(
+      saveDraft(workspace.slug, created.id, input),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      publishForm(workspace.slug, created.id, input),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      restoreDraftFromVersion(
+        workspace.slug,
+        created.id,
+        published.id,
+        input.expectedRevision,
+      ),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      createWebhookEndpoint(workspace.slug, created.id, {
+        name: "Blocked",
+        url: "https://receiver.example.org",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await db
+      .update(memberships)
+      .set({ role: "viewer" })
+      .where(eq(memberships.userId, user.id));
+    expect((await getFormForViewing(workspace.slug, created.id)).id).toBe(
+      created.id,
+    );
+    const other = await seedWorkspace();
+    await expect(
+      getFormForViewing(other.workspace.slug, created.id),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      listFormVersions(other.workspace.slug, created.id),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  test("lists archive and save timestamps independently without treating archive or unarchive as saves", async () => {
+    const { workspace } = await seedWorkspace();
+    const created = await createForm(workspace.slug, "Archive dates");
+    await saveDraft(workspace.slug, created.id, {
+      expectedRevision: created.updatedAt.toISOString(),
+      schema: { ...created.draftSchema, description: "Saved content" },
+    });
+    await db
+      .update(auditLogs)
+      .set({ createdAt: new Date("2026-08-01T10:00:00.000Z") })
+      .where(eq(auditLogs.resourceId, created.id));
+    const savedAt = new Date("2026-08-02T10:00:00.000Z");
+    await db
+      .update(auditLogs)
+      .set({ createdAt: savedAt })
+      .where(
+        and(
+          eq(auditLogs.resourceId, created.id),
+          eq(auditLogs.action, "form.draft_saved"),
+        ),
+      );
+    await archiveForm(workspace.slug, created.id);
+    const [archived] = await listArchivedForms(workspace.slug);
+    expect(archived?.archivedAt).toBeInstanceOf(Date);
+    expect(archived?.lastSavedAt).toEqual(savedAt);
+    expect(archived?.lastSavedAt).not.toEqual(archived?.archivedAt);
+    await restoreArchivedForm(workspace.slug, created.id);
+    await archiveForm(workspace.slug, created.id);
+    expect((await listArchivedForms(workspace.slug))[0]?.lastSavedAt).toEqual(
+      savedAt,
+    );
+  });
+
+  test("restores published and draft forms with their original data and status", async () => {
+    const { user, workspace } = await seedWorkspace();
+    for (const published of [true, false]) {
+      const seeded = await seedForm({
+        workspaceId: workspace.id,
+        userId: user.id,
+        published,
+      });
+      await archiveForm(workspace.slug, seeded.form.id);
+      expect(
+        (await listArchivedForms(workspace.slug)).map(({ id }) => id),
+      ).toContain(seeded.form.id);
+      expect(
+        await restoreArchivedForm(workspace.slug, seeded.form.id),
+      ).toMatchObject({
+        id: seeded.form.id,
+        status: published ? "published" : "draft",
+      });
+      const [restored] = await db
+        .select()
+        .from(forms)
+        .where(eq(forms.id, seeded.form.id));
+      expect(restored?.archivedAt).toBeNull();
+      expect(restored?.publishedVersionId).toBe(seeded.version?.id ?? null);
+    }
+  });
+
+  test("publishes the saved draft and rejects a stale list revision", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      workspaceId: workspace.id,
+      userId: user.id,
+      published: false,
+    });
+    const revision = seeded.form.updatedAt.toISOString();
+    await saveDraft(workspace.slug, seeded.form.id, {
+      expectedRevision: revision,
+      schema: { ...seeded.schema, title: "Updated draft" },
+    });
+    await expect(
+      publishSavedDraft(workspace.slug, seeded.form.id, revision),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const [current] = await db
+      .select()
+      .from(forms)
+      .where(eq(forms.id, seeded.form.id));
+    if (!current) throw new Error("Missing form");
+    await publishSavedDraft(
+      workspace.slug,
+      seeded.form.id,
+      current.updatedAt.toISOString(),
+    );
+    const [published] = await db
+      .select()
+      .from(forms)
+      .where(eq(forms.id, seeded.form.id));
+    expect(published?.status).toBe("published");
+    expect(published?.name).toBe("Updated draft");
+  });
+
+  test("permanent deletion requires an owner, an archived form and its exact name", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      workspaceId: workspace.id,
+      userId: user.id,
+    });
+    await expect(
+      permanentlyDeleteForm(
+        workspace.slug,
+        seeded.form.id,
+        seeded.schema.title,
+      ),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    await archiveForm(workspace.slug, seeded.form.id);
+    await expect(
+      permanentlyDeleteForm(workspace.slug, seeded.form.id, "wrong"),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    await db
+      .update(memberships)
+      .set({ role: "editor" })
+      .where(eq(memberships.userId, user.id));
+    await expect(
+      permanentlyDeleteForm(
+        workspace.slug,
+        seeded.form.id,
+        seeded.schema.title,
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await db
+      .update(memberships)
+      .set({ role: "viewer" })
+      .where(eq(memberships.userId, user.id));
+    await expect(
+      restoreArchivedForm(workspace.slug, seeded.form.id),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const other = await seedWorkspace();
+    await expect(
+      permanentlyDeleteForm(
+        other.workspace.slug,
+        seeded.form.id,
+        seeded.schema.title,
+      ),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      restoreArchivedForm(other.workspace.slug, seeded.form.id),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  test("deletes archived form data and queued events while preserving other forms and audit history", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      workspaceId: workspace.id,
+      userId: user.id,
+    });
+    const other = await seedForm({
+      workspaceId: workspace.id,
+      userId: user.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    const endpoint = await createWebhookEndpoint(
+      workspace.slug,
+      seeded.form.id,
+      { name: "Endpoint", url: "https://receiver.example.org" },
+    );
+    const submission = await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "delete-form",
+      input: { versionId: seeded.version.id, values: { name: "Ada" } },
+    });
+    await createDeliveriesForSubmission(submission.id, [endpoint.id]);
+    await archiveForm(workspace.slug, seeded.form.id);
+    await permanentlyDeleteForm(
+      workspace.slug,
+      seeded.form.id,
+      seeded.schema.title,
+    );
+    expect(
+      await db.select().from(forms).where(eq(forms.id, seeded.form.id)),
+    ).toHaveLength(0);
+    expect(
+      await db
+        .select()
+        .from(formVersions)
+        .where(eq(formVersions.formId, seeded.form.id)),
+    ).toHaveLength(0);
+    expect(
+      await db
+        .select()
+        .from(submissions)
+        .where(eq(submissions.formId, seeded.form.id)),
+    ).toHaveLength(0);
+    expect(
+      await db
+        .select()
+        .from(webhookEndpoints)
+        .where(eq(webhookEndpoints.formId, seeded.form.id)),
+    ).toHaveLength(0);
+    expect(await db.select().from(webhookDeliveries)).toHaveLength(0);
+    expect(await db.select().from(submissionEvents)).toHaveLength(0);
+    expect(await db.select().from(outboxEvents)).toHaveLength(0);
+    expect(
+      await db.select().from(forms).where(eq(forms.id, other.form.id)),
+    ).toHaveLength(1);
+    expect(
+      await db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.action, "form.deleted")),
+    ).toHaveLength(1);
+  });
+
+  test("refuses deletion until a claimed webhook delivery has completed", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      workspaceId: workspace.id,
+      userId: user.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    const endpoint = await createWebhookEndpoint(
+      workspace.slug,
+      seeded.form.id,
+      { name: "Endpoint", url: "https://receiver.example.org" },
+    );
+    const submission = await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "active-delete",
+      input: { versionId: seeded.version.id, values: { name: "Ada" } },
+    });
+    await createDeliveriesForSubmission(submission.id, [endpoint.id]);
+    await db
+      .update(webhookDeliveries)
+      .set({ status: "processing", lockedUntil: new Date(Date.now() + 60_000) })
+      .where(eq(webhookDeliveries.submissionId, submission.id));
+    await archiveForm(workspace.slug, seeded.form.id);
+    await expect(
+      permanentlyDeleteForm(
+        workspace.slug,
+        seeded.form.id,
+        seeded.schema.title,
+      ),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(
+      await db.select().from(forms).where(eq(forms.id, seeded.form.id)),
+    ).toHaveLength(1);
+    expect(
+      await db
+        .select()
+        .from(submissions)
+        .where(eq(submissions.id, submission.id)),
+    ).toHaveLength(1);
+  });
+
+  test.each(["submission", "endpoint"] as const)(
+    "rejects deletion without waiting for a worker's %s lock, then allows processing and deletion",
+    async (lockedResource) => {
+      const { user, workspace } = await seedWorkspace();
+      const seeded = await seedForm({
+        workspaceId: workspace.id,
+        userId: user.id,
+      });
+      if (!seeded.version) throw new Error("Missing version");
+      const endpoint = await createWebhookEndpoint(
+        workspace.slug,
+        seeded.form.id,
+        { name: "Endpoint", url: "https://receiver.example.org" },
+      );
+      const submission = await receiveSubmission({
+        slug: seeded.form.slug,
+        idempotencyKey: `delete-lock-${lockedResource}`,
+        input: { versionId: seeded.version.id, values: { name: "Ada" } },
+      });
+      await archiveForm(workspace.slug, seeded.form.id);
+      let deletion: ReturnType<typeof permanentlyDeleteForm> | undefined;
+      try {
+        await db.transaction(async (tx) => {
+          const lockSubmission = () =>
+            tx
+              .select({ id: submissions.id })
+              .from(submissions)
+              .where(eq(submissions.id, submission.id))
+              .for("update", { noWait: true });
+          const lockEndpoint = () =>
+            tx
+              .select({ id: webhookEndpoints.id })
+              .from(webhookEndpoints)
+              .where(eq(webhookEndpoints.id, endpoint.id))
+              .for("update", { noWait: true });
+          await (lockedResource === "submission"
+            ? lockSubmission()
+            : lockEndpoint());
+          deletion = permanentlyDeleteForm(
+            workspace.slug,
+            seeded.form.id,
+            seeded.schema.title,
+          );
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              expect(deletion).rejects.toMatchObject({
+                code: "CONFLICT",
+                status: 409,
+                message: expect.stringContaining("Background processing"),
+              }),
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(
+                  () => reject(new Error("Deletion waited for a worker lock")),
+                  3_000,
+                );
+              }),
+            ]);
+          } finally {
+            clearTimeout(timer);
+          }
+          // A rejected deletion must release all locks it acquired, so the
+          // worker can finish even if it next needs the other resource.
+          await (lockedResource === "submission"
+            ? lockEndpoint()
+            : lockSubmission());
+        });
+      } finally {
+        await deletion?.catch(() => undefined);
+      }
+      expect(
+        await db.select().from(forms).where(eq(forms.id, seeded.form.id)),
+      ).toHaveLength(1);
+      expect(await db.select().from(outboxEvents)).toHaveLength(1);
+      expect(
+        await createDeliveriesForSubmission(submission.id, [endpoint.id]),
+      ).toBe(1);
+      await permanentlyDeleteForm(
+        workspace.slug,
+        seeded.form.id,
+        seeded.schema.title,
+      );
+      expect(
+        await db.select().from(forms).where(eq(forms.id, seeded.form.id)),
+      ).toHaveLength(0);
+      expect(await db.select().from(submissions)).toHaveLength(0);
+      expect(await db.select().from(webhookDeliveries)).toHaveLength(0);
+      expect(await db.select().from(outboxEvents)).toHaveLength(0);
+    },
+    10_000,
+  );
 
   test("applies the migrations to the dedicated PostgreSQL database", async () => {
     const result = await db.execute<{

@@ -82,6 +82,7 @@ export type SelectField = BaseField & {
 
 export type CheckboxField = BaseField & {
   type: "checkbox";
+  link?: { label: string; url: string } | undefined;
 };
 
 export type DateField = BaseField & {

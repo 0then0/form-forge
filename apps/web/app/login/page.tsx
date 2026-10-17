@@ -1,14 +1,22 @@
 import { Card, CardContent, CardHeader } from "@form-forge/ui";
 import { redirect } from "next/navigation";
 
+import { authOptions } from "@/auth/options";
+import { AuthError } from "@/components/auth-error";
 import { getSession } from "@/auth/session";
 import { BrandMark } from "@/components/brand-mark";
 import { SignInButton } from "@/components/sign-in-button";
 import { ThemeToggle } from "@/components/theme-toggle";
 
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error } = await searchParams;
   const session = await getSession();
-  if (session) redirect("/app");
+  if (session)
+    redirect(error ? `/account?error=${encodeURIComponent(error)}` : "/app");
 
   return (
     <main className="relative flex min-h-screen items-center justify-center px-6 py-12">
@@ -27,7 +35,10 @@ export default async function LoginPage() {
           </p>
         </CardHeader>
         <CardContent>
-          <SignInButton />
+          <AuthError error={error} />
+          <SignInButton
+            enabledProviders={authOptions.providers.map(({ id }) => id)}
+          />
         </CardContent>
       </Card>
     </main>

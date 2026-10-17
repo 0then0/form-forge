@@ -1,7 +1,8 @@
 import { canEdit, requireWorkspace } from "@/auth/permissions";
 import { SchemaEditor } from "@/components/editor/schema-editor";
 import { env } from "@/env";
-import { getForm, listFormVersions } from "@/services/forms";
+import { ArchivedFormView } from "@/components/editor/archived-form-view";
+import { getFormForViewing, listFormVersions } from "@/services/forms";
 
 export default async function FormEditorPage({
   params,
@@ -11,9 +12,26 @@ export default async function FormEditorPage({
   const { formId, workspaceSlug } = await params;
   const [workspace, form, versionPage] = await Promise.all([
     requireWorkspace(workspaceSlug),
-    getForm(workspaceSlug, formId),
+    getFormForViewing(workspaceSlug, formId),
     listFormVersions(workspaceSlug, formId),
   ]);
+
+  if (form.status === "archived") {
+    return (
+      <ArchivedFormView
+        schema={form.draftSchema}
+        archivedAt={form.archivedAt?.toISOString() ?? null}
+        formId={form.id}
+        draftRevision={form.updatedAt.toISOString()}
+        versions={versionPage.data.map((version) => ({
+          ...version,
+          publishedAt: version.publishedAt.toISOString(),
+        }))}
+        initialVersionCursor={versionPage.nextCursor}
+        workspaceSlug={workspaceSlug}
+      />
+    );
+  }
 
   return (
     <SchemaEditor

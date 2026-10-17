@@ -1,3 +1,4 @@
+import { isSafeHttpUrl } from "@form-forge/form-schema";
 import type * as React from "react";
 
 import type { RendererComponents } from "./types";
@@ -12,9 +13,30 @@ const FieldShell: RendererComponents["FieldShell"] = ({
       {field.label}
       {field.required ? " *" : null}
     </label>
-    {field.description === undefined ? null : <p>{field.description}</p>}
+    {field.type === "checkbox" &&
+    field.link &&
+    isSafeHttpUrl(field.link.url) ? (
+      <>
+        {" "}
+        <a
+          id={`${field.id}-link`}
+          href={field.link.url}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {field.link.label}
+        </a>
+      </>
+    ) : null}
+    {field.description === undefined ? null : (
+      <p id={`${field.id}-description`}>{field.description}</p>
+    )}
     {children}
-    {error === undefined ? null : <p role="alert">{error}</p>}
+    {error === undefined ? null : (
+      <p id={`${field.id}-error`} role="alert">
+        {error}
+      </p>
+    )}
   </div>
 );
 
@@ -35,8 +57,9 @@ const ErrorSummary = ({ errors }: { errors: string[] }) =>
     <div role="alert">
       <p>Please correct the following errors:</p>
       <ul>
-        {errors.map((error) => (
-          <li key={error}>{error}</li>
+        {errors.map((error, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: Repeated messages have no local state.
+          <li key={`${error}-${index}`}>{error}</li>
         ))}
       </ul>
     </div>

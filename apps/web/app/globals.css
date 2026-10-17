@@ -12,8 +12,10 @@
   color: var(--app-foreground);
 }
 
-* {
-  border-color: var(--color-slate-200);
+@layer base {
+  * {
+    border-color: var(--color-slate-200);
+  }
 }
 
 body {

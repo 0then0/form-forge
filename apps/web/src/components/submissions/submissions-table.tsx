@@ -83,7 +83,7 @@ export const SubmissionsTable = ({
           cell: (cell) => (
             <Link
               href={`/app/${workspaceSlug}/submissions/${cell.row.original.id}`}
-              className="font-medium text-slate-950 hover:underline"
+              className="font-medium text-slate-950 after:absolute after:inset-0 focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-blue-600"
             >
               {cell.getValue()}
             </Link>
@@ -199,7 +199,10 @@ export const SubmissionsTable = ({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {table.getRowModel().rows.map((row) => (
-                <tr key={row.id} className="hover:bg-slate-50">
+                <tr
+                  key={row.id}
+                  className="relative hover:bg-slate-50 focus-within:bg-slate-50"
+                >
                   {row.getAllCells().map((cell) => (
                     <td key={cell.id} className="px-4 py-3 whitespace-nowrap">
                       <table.FlexRender cell={cell} />

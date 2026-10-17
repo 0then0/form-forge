@@ -25,6 +25,9 @@ const schema: FormSchemaV1 = {
   title: "Consent",
 };
 
+const checkboxField = schema.fields[0];
+if (!checkboxField) throw new Error("Missing checkbox fixture");
+
 describe("webRendererComponents", () => {
   it("keeps a checkbox compact and labels it as one control", () => {
     render(
@@ -42,4 +45,49 @@ describe("webRendererComponents", () => {
     expect(checkbox).not.toHaveClass("w-full");
     expect(checkbox.parentElement).toHaveClass("flex", "items-center");
   });
+});
+
+it("renders an agreement link beside its checkbox and connects its accessible description", () => {
+  render(
+    <FormRenderer
+      components={webRendererComponents}
+      schema={{
+        ...schema,
+        fields: [
+          {
+            ...checkboxField,
+            type: "checkbox",
+            link: { label: "User agreement", url: "https://example.com/terms" },
+          },
+        ],
+      }}
+      onSubmit={() => undefined}
+    />,
+  );
+  const link = screen.getByRole("link", { name: "User agreement" });
+  expect(link).toHaveAttribute("href", "https://example.com/terms");
+  expect(link.closest("label")).toBeNull();
+  expect(screen.getByRole("checkbox")).toHaveAccessibleDescription(
+    "User agreement",
+  );
+});
+
+it("does not render unsafe agreement links even for an unvalidated schema", () => {
+  render(
+    <FormRenderer
+      components={webRendererComponents}
+      schema={{
+        ...schema,
+        fields: [
+          {
+            ...checkboxField,
+            type: "checkbox",
+            link: { label: "Unsafe link", url: "javascript:alert(1)" },
+          },
+        ],
+      }}
+      onSubmit={() => undefined}
+    />,
+  );
+  expect(screen.queryByRole("link")).toBeNull();
 });

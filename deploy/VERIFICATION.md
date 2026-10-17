@@ -37,7 +37,7 @@ project with empty volumes and temporary keys, and exercises:
 - Runtime production guards, hostname consistency, migration readiness and
   repeatable migrations.
 - Private services, ingress client-IP replacement, signed Inngest invocations,
-  registration of all three functions and actual completed minute cron runs.
+  registration of all three functions and actual completed five-minute cron runs.
 - Atomic submission/outbox persistence during a scheduler outage and normal
   cron recovery after restart.
 - Real HTTPS delivery with raw-byte HMAC verification, a persisted 503 and

@@ -1,6 +1,6 @@
 "use client";
 
-import { formSchemaV1Schema, type FormSchemaV1 } from "@form-forge/form-schema";
+import type { FormSchemaV1 } from "@form-forge/form-schema";
 import {
   Alert,
   Button,
@@ -17,48 +17,14 @@ import { useState } from "react";
 
 import { readApiData } from "@/lib/client-api";
 import { LocalDateTime } from "@/components/local-date-time";
-import { normalizeSchemaForComparison } from "./schema-comparison";
+import { compareSchemas } from "./schema-comparison";
+import { VersionComparison } from "./version-comparison";
 
 type Version = {
   id: string;
   publishedAt: string;
   schema: FormSchemaV1;
   versionNumber: number;
-};
-
-const compareSchemas = (version: FormSchemaV1, draft: FormSchemaV1) => {
-  const comparedVersion = normalizeSchemaForComparison(
-    formSchemaV1Schema.parse(version),
-  );
-  const parsedDraft = formSchemaV1Schema.safeParse(draft);
-  const comparedDraft = normalizeSchemaForComparison(
-    parsedDraft.success ? parsedDraft.data : draft,
-  );
-  const oldFields = new Map(
-    comparedVersion.fields.map((field) => [field.id, field]),
-  );
-  const draftFields = new Map(
-    comparedDraft.fields.map((field) => [field.id, field]),
-  );
-  const added = comparedDraft.fields.filter(
-    (field) => !oldFields.has(field.id),
-  ).length;
-  const removed = comparedVersion.fields.filter(
-    (field) => !draftFields.has(field.id),
-  ).length;
-  const changed = comparedDraft.fields.filter((field) => {
-    const previous = oldFields.get(field.id);
-    return previous && JSON.stringify(previous) !== JSON.stringify(field);
-  }).length;
-  const formSettingsChanged =
-    comparedVersion.title !== comparedDraft.title ||
-    comparedVersion.description !== comparedDraft.description ||
-    JSON.stringify(comparedVersion.settings) !==
-      JSON.stringify(comparedDraft.settings);
-  const orderChanged =
-    JSON.stringify(version.fields.map((field) => field.id)) !==
-    JSON.stringify(draft.fields.map((field) => field.id));
-  return { added, changed, formSettingsChanged, orderChanged, removed };
 };
 
 export const VersionHistory = ({
@@ -87,6 +53,7 @@ export const VersionHistory = ({
   workspaceSlug: string;
 }) => {
   const [error, setError] = useState<string>();
+  const [inspectedId, setInspectedId] = useState<string>();
   const [restoringId, setRestoringId] = useState<string>();
   const [items, setItems] = useState(versions);
   const [cursor, setCursor] = useState(initialCursor);
@@ -173,7 +140,7 @@ export const VersionHistory = ({
         </p>
       </div>
       <CardContent>
-        {error ? <Alert className="mb-3">{error}</Alert> : null}
+        {error && !inspectedId ? <Alert className="mb-3">{error}</Alert> : null}
         {items.length === 0 ? (
           <p className="text-sm text-slate-600">No published versions yet.</p>
         ) : (
@@ -181,7 +148,10 @@ export const VersionHistory = ({
             {items.map((version) => {
               const diff = compareSchemas(version.schema, currentSchema);
               return (
-                <li key={version.id} className="rounded-lg border p-3 text-sm">
+                <li
+                  key={version.id}
+                  className="rounded-lg border border-slate-200 p-3 text-sm"
+                >
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <div className="font-medium">
@@ -192,53 +162,56 @@ export const VersionHistory = ({
                         value={version.publishedAt}
                       />
                     </div>
-                    <Dialog>
+                    <Dialog
+                      open={inspectedId === version.id}
+                      onOpenChange={(open) =>
+                        setInspectedId(open ? version.id : undefined)
+                      }
+                    >
                       <DialogTrigger asChild>
                         <Button size="sm" variant="secondary">
                           Inspect
                         </Button>
                       </DialogTrigger>
-                      <DialogContent className="max-w-3xl">
-                        <DialogTitle>
-                          Version {version.versionNumber}
-                        </DialogTitle>
-                        <DialogDescription>
-                          Compared with the current draft: {diff.added} added,{" "}
-                          {diff.changed} changed, {diff.removed} removed fields.
-                          {diff.orderChanged ? " Field order changed." : ""}
-                          {diff.formSettingsChanged
-                            ? " Form settings changed."
-                            : ""}
-                        </DialogDescription>
-                        <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                          <section>
-                            <h3 className="mb-2 text-sm font-medium">
-                              Version {version.versionNumber}
-                            </h3>
-                            <pre className="max-h-[55vh] overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-100">
-                              {JSON.stringify(version.schema, null, 2)}
-                            </pre>
-                          </section>
-                          <section>
-                            <h3 className="mb-2 text-sm font-medium">
-                              Current draft
-                            </h3>
-                            <pre className="max-h-[55vh] overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-100">
-                              {JSON.stringify(currentSchema, null, 2)}
-                            </pre>
-                          </section>
+                      <DialogContent variant="panel">
+                        <div className="shrink-0 border-b border-slate-200 px-6 py-5 pr-12">
+                          <DialogTitle>
+                            Version {version.versionNumber}
+                          </DialogTitle>
+                          <DialogDescription>
+                            Changes in the current draft compared with this
+                            version: {diff.added} added, {diff.changed} changed,{" "}
+                            {diff.removed} removed fields.
+                            {diff.orderChanged ? " Field order changed." : ""}
+                            {diff.formSettingsChanged
+                              ? " Form settings changed."
+                              : ""}
+                          </DialogDescription>
                         </div>
-                        <Button
-                          className="mt-4"
-                          disabled={!canEdit || restoringId !== undefined}
-                          variant="secondary"
-                          onClick={() => void restore(version)}
-                        >
-                          <RotateCcw className="size-4" />
-                          {restoringId === version.id
-                            ? "Restoring…"
-                            : "Use as draft"}
-                        </Button>
+                        <div className="min-h-0 overflow-y-auto overscroll-contain px-6 py-5">
+                          <VersionComparison
+                            comparison={diff}
+                            versionNumber={version.versionNumber}
+                          />
+                        </div>
+                        <div className="shrink-0 space-y-3 border-t border-slate-200 px-6 py-4">
+                          {error ? <Alert>{error}</Alert> : null}
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <p className="text-sm text-slate-500">
+                              Restore this version as an editable draft.
+                            </p>
+                            <Button
+                              disabled={!canEdit || restoringId !== undefined}
+                              variant="secondary"
+                              onClick={() => void restore(version)}
+                            >
+                              <RotateCcw className="size-4" />
+                              {restoringId === version.id
+                                ? "Restoring…"
+                                : "Use as draft"}
+                            </Button>
+                          </div>
+                        </div>
                       </DialogContent>
                     </Dialog>
                   </div>

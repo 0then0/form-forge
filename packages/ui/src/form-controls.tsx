@@ -6,7 +6,7 @@ const controlClassName =
   "block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none placeholder:text-slate-400 focus:border-slate-500 focus:ring-2 focus:ring-slate-200 disabled:cursor-not-allowed disabled:bg-slate-100";
 
 const checkboxClassName =
-  "size-4 shrink-0 rounded border-slate-300 text-slate-950 shadow-sm accent-slate-950 outline-none focus:ring-2 focus:ring-slate-200 disabled:cursor-not-allowed disabled:opacity-60";
+  "size-4 shrink-0 rounded border-slate-300 text-slate-950 shadow-sm accent-slate-950 outline-none focus:ring-2 focus:ring-slate-200 dark:accent-blue-400 dark:focus:ring-blue-400/40 disabled:cursor-not-allowed disabled:opacity-60";
 
 export const Input = React.forwardRef<
   HTMLInputElement,
