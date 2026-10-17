@@ -12,19 +12,13 @@ describe("sign-in provider configuration", () => {
       ...config,
       AUTH_GOOGLE_ID: "google",
       AUTH_GOOGLE_SECRET: "secret",
-      AUTH_APPLE_ID: "apple",
-      AUTH_APPLE_SECRET: "secret",
       AUTH_GITLAB_ID: "gitlab",
       AUTH_GITLAB_SECRET: "secret",
-      AUTH_CHATGPT_ID: "oaiapp_client",
-      AUTH_CHATGPT_SECRET: "secret",
     });
     expect(providers.map(({ id }) => id)).toEqual([
       "github",
       "google",
-      "apple",
       "gitlab",
-      "chatgpt",
     ]);
     for (const provider of providers) {
       if (provider.type === "oauth") {
@@ -34,12 +28,6 @@ describe("sign-in provider configuration", () => {
         );
       }
     }
-    const chatgpt = providers.find(({ id }) => id === "chatgpt");
-    expect(chatgpt).toMatchObject({
-      wellKnown: "https://auth.openai.com/.well-known/openid-configuration",
-      checks: ["pkce", "state", "nonce"],
-      idToken: true,
-    });
   });
 
   it("does not register unconfigured methods and refuses partial credentials", () => {
@@ -47,5 +35,16 @@ describe("sign-in provider configuration", () => {
     expect(() =>
       createAuthProviders({ ...config, AUTH_GOOGLE_ID: "google" }),
     ).toThrow("both a client ID and client secret");
+  });
+
+  it("does not re-enable removed providers through legacy configuration", () => {
+    const legacy = {
+      ...config,
+      AUTH_APPLE_ID: "old-apple-client",
+      AUTH_APPLE_SECRET: "old-secret",
+      AUTH_CHATGPT_ID: "old-chatgpt-client",
+      AUTH_CHATGPT_SECRET: "old-secret",
+    };
+    expect(createAuthProviders(legacy).map(({ id }) => id)).toEqual(["github"]);
   });
 });

@@ -5,7 +5,7 @@ versioned schemas, hosted forms, workspaces, and inspectable webhook delivery.
 
 ## Changes since 0.1.0-rc.2
 
-- Google, Apple, GitLab, and ChatGPT sign-in alongside GitHub. Link methods from
+- Google and GitLab sign-in alongside GitHub. Link methods from
   an authenticated account to retain the same user and workspace memberships.
   Matching email addresses never automatically merge accounts.
 - Read-only access to archived forms and their published versions, archive
@@ -34,9 +34,7 @@ Back up the database, installation keys, and scheduler storage before updating.
 No database migrations were added since rc.2; retain the existing migration history.
 Configure additional OAuth providers only when both client credentials are ready,
 using the callback URLs documented in the root README. GitHub remains required.
-Apple requires HTTPS and a client-secret JWT that must be renewed before expiry.
-ChatGPT website sign-in requires an approved OpenAI OAuth client; an API key is
-not sufficient. Unconfigured sign-in methods remain unavailable.
+Unconfigured sign-in methods remain unavailable.
 
 Register the updated Inngest functions so the recovery job uses the five-minute
 schedule. Restoring an archived published form reopens its existing public URL.
@@ -53,9 +51,9 @@ backup before relying on the current restore verification.
 
 The application revision passed GitHub CI: supported Node-version tests, static
 checks, PostgreSQL integration tests, deployment regressions, the browser
-lifecycle suite, production build, and production smoke test. The deletion fix
-is covered by 46 PostgreSQL integration tests, including competing submission
-and endpoint locks, transaction rollback, and successful retry after processing.
+lifecycle suite, production build, and production smoke test. The PostgreSQL
+integration suite contains 46 passing tests, including competing submission and
+endpoint locks, transaction rollback, and successful retry after processing.
 
 This release does not claim that live OAuth, public DNS/TLS, or the full
 three-store cold-restore acceptance suite were reverified for this revision.

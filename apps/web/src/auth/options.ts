@@ -15,32 +15,6 @@ export const authOptions: NextAuthOptions = {
     verificationTokensTable: verificationTokens,
   }),
   providers: createAuthProviders(env),
-  // Apple's cross-site form_post callback must carry the session (for linking)
-  // and OAuth checks. These cookies require HTTPS; CSRF checks remain enabled.
-  ...(env.AUTH_APPLE_ID && env.NEXTAUTH_URL.startsWith("https:")
-    ? {
-        cookies: Object.fromEntries(
-          [
-            ["sessionToken", "session-token"],
-            ["state", "state"],
-            ["pkceCodeVerifier", "pkce.code_verifier"],
-            ["nonce", "nonce"],
-          ].map(([key, name]) => [
-            key,
-            {
-              name: `__Secure-next-auth.${name}`,
-              options: {
-                httpOnly: true,
-                sameSite: "none" as const,
-                path: "/",
-                secure: true,
-                ...(key === "sessionToken" ? {} : { maxAge: 900 }),
-              },
-            },
-          ]),
-        ),
-      }
-    : {}),
   secret: env.AUTH_SECRET,
   session: { strategy: "database" },
   pages: { signIn: "/login", error: "/login" },

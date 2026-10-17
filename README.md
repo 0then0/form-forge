@@ -25,31 +25,19 @@ Form Forge is free/libre and open-source software under Apache 2.0. It includes 
 - Signed webhooks, automatic retries, manual recovery, and endpoint management: edit, disable, enable, archive, and rotate secrets.
 - Workspace roles: owner, editor, and viewer.
 - System, light, and dark themes.
-- GitHub, Google, Apple, GitLab, and ChatGPT sign-in with account linking.
+- GitHub, Google, and GitLab sign-in with account linking.
 - Form archive, restoration, and owner-only permanent deletion.
 
 ## Sign-in methods and account linking
 
 GitHub remains the required default provider. Enable additional providers by setting
-both `AUTH_<PROVIDER>_ID` and `AUTH_<PROVIDER>_SECRET` (`GOOGLE`, `APPLE`, `GITLAB`,
-`CHATGPT`). Unconfigured methods are shown as unavailable. Register these exact callback paths
+both `AUTH_<PROVIDER>_ID` and `AUTH_<PROVIDER>_SECRET` (`GOOGLE`, `GITLAB`).
+Unconfigured methods are shown as unavailable. Register these exact callback paths
 under your `NEXTAUTH_URL` origin:
 
 - `/api/auth/callback/github`
 - `/api/auth/callback/google`
-- `/api/auth/callback/apple`
 - `/api/auth/callback/gitlab`
-- `/api/auth/callback/chatgpt`
-
-Apple requires a Services ID, a signed client-secret JWT that must be rotated before
-expiry, and an HTTPS callback. With Apple enabled on HTTPS, session and OAuth check
-cookies use `Secure; SameSite=None` so Apple's `form_post` callback can verify the
-transaction and preserve the signed-in account during linking. NextAuth CSRF protections
-remain enabled, and admin mutations reject cross-origin browser requests.
-ChatGPT uses the official OpenID Connect discovery endpoint with PKCE, state and nonce.
-Its confidential OAuth client must be registered with `client_secret_post` authentication.
-Website sign-in is currently a limited trial for approved OpenAI partners; an ordinary
-OpenAI API key is not a sign-in client. See [the official website integration guide](https://developers.openai.com/siwc/website).
 
 Open **Account** from the header and confirm **Link** for another sign-in method.
 NextAuth attaches the verified provider account to the current user, preserving the

@@ -9,8 +9,8 @@ export function proxy(request: Request) {
     return NextResponse.next();
   const origin = request.headers.get("origin");
   const site = request.headers.get("sec-fetch-site");
-  // Apple's form_post needs SameSite=None session cookies. Keep browser-driven
-  // admin mutations bound to our own origin; OAuth callbacks use NextAuth checks.
+  // Keep browser-driven admin mutations bound to our own origin; OAuth callbacks
+  // use NextAuth checks.
   // Non-browser API clients without Origin/Fetch Metadata remain supported.
   if (
     (origin !== null && origin !== new URL(env.NEXTAUTH_URL).origin) ||
