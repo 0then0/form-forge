@@ -13,22 +13,70 @@ both connection strings from **Connect**, preserving their SSL parameters:
 - **Direct**, without `-pooler`: migration commands.
 
 The existing `pg` and Drizzle client supports Neon without an additional driver.
+Use **`sslmode=verify-full`** in the migration URL and preserve other Neon
+parameters, including `channel_binding=require` when present. This explicitly
+keeps certificate and hostname verification and avoids the `pg` warning about
+the future meaning of `sslmode=require`. Do not disable TLS verification to fix
+connection timeouts.
+
+### Manual GitHub Actions run (recommended for Neon)
+
+1. In GitHub, open **Settings → Secrets and variables → Actions → New repository
+   secret**. Name it **`NEON_MIGRATION_DATABASE_URL`** and store the **direct**
+   connection URL, with `sslmode=verify-full`. Netlify's pooled URL remains separate.
+2. Ensure the desired migrations are committed on `main` and its CI checks pass.
+   Back up the database, stop application writes and pause workers before upgrading
+   an existing installation. See [upgrade precautions](../docs/operations.md).
+3. Open **Actions → Database migrations → Run workflow**, select **main**, and run
+   it. The workflow applies all pending committed migrations from that commit,
+   including `0006` if only `0000`–`0005` are recorded. It does not generate SQL or
+   apply only one arbitrarily selected migration.
+4. Confirm **Apply committed migrations** succeeds before deploying the matching
+   application version and resuming writes and workers.
+
+The [workflow](../.github/workflows/migrate.yml) runs only on manual dispatch from
+`main`, never on push, PR, release, Netlify build or function startup. Concurrent
+workflow runs are serialized. Do not run local migrations at the same time. The
+database secret is supplied only to the migration step, after dependencies are
+installed with a frozen lockfile and lifecycle scripts disabled. That step runs
+Node directly, avoiding pnpm's automatic dependency installation before scripts.
+GitHub runners
+must have network access to Neon; IP restrictions must allow that path.
+
+This bypasses a failing local network path. A local `read ETIMEDOUT` is not an SQL
+migration failure merely because small queries work. The SSL warning and transport
+timeout are separate issues; changing `sslmode` does not repair the network path.
+
+### Local alternative
+
 From the repository root, with the required Node.js/pnpm versions and dependencies
-installed, apply the committed migrations to an empty database:
+installed:
 
 ```sh
-export DATABASE_URL='postgresql://USER:PASSWORD@DIRECT_HOST/DB?sslmode=require'
+export DATABASE_URL='postgresql://USER:PASSWORD@DIRECT_HOST/DB?sslmode=verify-full&channel_binding=require'
 pnpm db:migrate
 unset DATABASE_URL
 ```
 
-Drizzle Kit reads the exported `DATABASE_URL`, not Next.js env files or variables
+The migration runner reads the exported `DATABASE_URL`, not Next.js env files or variables
 named `DIRECT_URL` or `DATABASE_URL_UNPOOLED`. Pass the direct connection as
 `DATABASE_URL` for this command. Keep migrations out of build commands and function
 startup to avoid concurrent migration runs and accidental production changes from
-Deploy Previews. For later updates, follow the maintenance precautions in the root
-README. Preserve installation keys and transfer existing data before enabling
+Deploy Previews. For later updates, follow the [maintenance precautions](../docs/operations.md).
+Preserve installation keys and transfer existing data before enabling
 writes and workers when moving an existing installation.
+
+The runner uses the existing Drizzle migration files and `drizzle.__drizzle_migrations`
+history, including installations initialized through Neon SQL Editor with the
+original hashes and timestamps. No history reset, manual recreation of `0006`, or
+new migration is needed. Connection attempts are limited to 15 seconds, lock waits
+to 15 seconds and each SQL statement to five minutes. For a deliberately longer
+maintenance operation, set `MIGRATION_STATEMENT_TIMEOUT_MS` explicitly; the manual
+workflow also has a 15-minute overall limit. Errors close the connection and return
+a nonzero exit status without printing SQL, answer values or credentials. There
+are no automatic retries. After a dropped connection, inspect migration history
+and database state before rerunning: losing the `COMMIT` acknowledgement makes
+the result uncertain. Do not insert history rows by hand to suppress an error.
 
 See [Neon's Drizzle guide](https://neon.com/docs/guides/drizzle).
 

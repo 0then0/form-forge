@@ -13,7 +13,7 @@
     "test:e2e": "playwright test",
     "test:production": "playwright test --config playwright.production.config.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "node scripts/migrate.mjs",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {

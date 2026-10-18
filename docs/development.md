@@ -24,6 +24,8 @@ pnpm db:studio     # Open Drizzle Studio
 
 Database commands require `DATABASE_URL` in the shell. Biome formats and lints JavaScript, TypeScript, JSON, and CSS. Prettier formats Markdown and YAML. TypeScript 7.0.2 checks types through the native compiler CLI, including during `next build`. Biome enables Promise checks, but these rules are experimental and do not guarantee identical coverage to typescript-eslint. Lefthook checks staged code with Biome and formats staged Markdown and YAML with Prettier; it does not run tests.
 
+`db:migrate` runs the existing Drizzle ORM migrator through `apps/web/scripts/migrate.mjs`, with explicit connection cleanup, bounded waits and redacted errors. It preserves the SQL files, journal hashes, timestamps and migration history used by Drizzle Kit. `db:generate` and `db:studio` still use Drizzle Kit. Neon installations can use the [manual GitHub Actions workflow](../deploy/NETLIFY.md#manual-github-actions-run-recommended-for-neon) instead of connecting from a local computer. It is separate from CI and never runs automatically on push.
+
 ## Continuous integration
 
 [GitHub Actions](../.github/workflows/ci.yml) runs on pull requests and pushes to `main`. It installs locked dependencies, applies migrations to an empty PostgreSQL database, checks formatting, types, lint, and unused code, and runs unit tests, PostgreSQL integration tests, deployment utility regressions, the browser lifecycle test, a production build, and a smoke test using `next start`.
@@ -53,7 +55,7 @@ pnpm --filter @form-forge/web exec vitest run \
   src/integration/pipeline.integration.test.ts
 ```
 
-The suite applies migrations and checks submission atomicity and idempotency, role permissions, concurrent changes, outbox and lease recovery, webhook failures and retries, endpoint management, and CSV export. External webhook transport is substituted in pipeline tests.
+The suite applies migrations and checks submission atomicity and idempotency, role permissions, concurrent changes, outbox and lease recovery, webhook failures and retries, endpoint management, and CSV export. External webhook transport is substituted in pipeline tests. The migration CLI regression creates and removes its own temporary database on this disposable server (the test role needs `CREATEDB`); it checks upgrading `0005` to `0006`, transaction rollback after a statement timeout while waiting for a lock, retry, preserved history and historical workspace data.
 
 **The integration suite drops and recreates the test database's `public` schema. Never use a development, shared, or production database.** Do not run it concurrently with e2e tests against the same database.
 

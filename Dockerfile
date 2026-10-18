@@ -32,12 +32,13 @@ RUN test -n "$NEXT_PUBLIC_APP_URL" && \
 
 FROM dependencies AS migrate
 COPY apps/web/drizzle apps/web/drizzle
+COPY apps/web/scripts/migrate.mjs apps/web/scripts/migrate.mjs
 COPY apps/web/drizzle.config.ts apps/web/drizzle.config.ts
 COPY apps/web/src/db/schema.ts apps/web/src/db/schema.ts
 COPY packages/form-schema packages/form-schema
 USER node
 WORKDIR /app/apps/web
-CMD ["pnpm", "db:migrate"]
+CMD ["node", "scripts/migrate.mjs"]
 
 FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
 WORKDIR /app

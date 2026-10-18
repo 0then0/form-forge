@@ -76,7 +76,7 @@ Set `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` in `apps/web/.env` to the applicat
 
 ## 5. Apply migrations
 
-Drizzle Kit does not load the Next.js environment files. Export the same database URL before running database commands:
+Database commands do not load the Next.js environment files. Export the same database URL before running migrations:
 
 ```sh
 export DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:5432/form_forge'
