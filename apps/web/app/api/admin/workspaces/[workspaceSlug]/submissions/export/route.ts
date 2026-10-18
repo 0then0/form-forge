@@ -1,13 +1,7 @@
 import { apiError } from "@/lib/api";
 import { exportSubmissionsCsv } from "@/services/submissions";
-import { z } from "zod";
 
-const querySchema = z.object({
-  deliveryStatus: z
-    .enum(["pending", "processing", "succeeded", "failed"])
-    .optional(),
-  formId: z.uuid().optional(),
-});
+import { submissionFilterSchema as querySchema } from "@/lib/submission-filters";
 
 export const GET = async (
   request: Request,

@@ -2,6 +2,7 @@ import type { FormSchemaV1 } from "@form-forge/form-schema";
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -147,11 +148,27 @@ export const forms = pgTable(
       .notNull()
       .references(() => users.id),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
+    collectMetadata: boolean("collect_metadata").default(false).notNull(),
+    paused: boolean("paused").default(false).notNull(),
+    closesAt: timestamp("closes_at", { withTimezone: true }),
+    maxAccepted: integer("max_accepted"),
+    acceptedCount: integer("accepted_count").default(0).notNull(),
+    closedMessage: varchar("closed_message", { length: 500 })
+      .default("This form is no longer accepting responses.")
+      .notNull(),
+    policyUpdatedAt: timestamp("policy_updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     ...timestamps,
   },
   (table) => [
     uniqueIndex("forms_slug_idx").on(table.slug),
     index("forms_workspace_idx").on(table.workspaceId, table.updatedAt),
+    check(
+      "forms_max_accepted_check",
+      sql`${table.maxAccepted} is null or ${table.maxAccepted} > 0`,
+    ),
+    check("forms_accepted_count_check", sql`${table.acceptedCount} >= 0`),
   ],
 );
 
@@ -204,12 +221,24 @@ export const submissions = pgTable(
     deliveryStatus: deliveryStatusEnum("delivery_status")
       .default("pending")
       .notNull(),
+    processingStatus: varchar("processing_status", { length: 16 })
+      .$type<"new" | "processed">()
+      .default("new")
+      .notNull(),
     idempotencyKey: varchar("idempotency_key", { length: 200 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
   (table) => [
+    check(
+      "submissions_processing_status_check",
+      sql`${table.processingStatus} in ('new', 'processed')`,
+    ),
+    index("submissions_search_idx").using(
+      "gin",
+      sql`jsonb_to_tsvector('simple'::regconfig, ${table.normalizedValues}, '["string", "numeric", "boolean"]'::jsonb)`,
+    ),
     uniqueIndex("submissions_idempotency_idx").on(
       table.formId,
       table.idempotencyKey,
@@ -220,6 +249,22 @@ export const submissions = pgTable(
       table.fingerprintHash,
       table.createdAt,
     ),
+  ],
+);
+
+// No values, original key or visitor identity survives individual deletion.
+export const deletedSubmissionKeys = pgTable(
+  "deleted_submission_keys",
+  {
+    formId: uuid("form_id")
+      .notNull()
+      .references(() => forms.id, { onDelete: "cascade" }),
+    keyHash: varchar("key_hash", { length: 64 }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.formId, table.keyHash] }),
+    index("deleted_submission_keys_expiry_idx").on(table.expiresAt),
   ],
 );
 

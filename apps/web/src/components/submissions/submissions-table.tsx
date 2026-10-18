@@ -1,6 +1,13 @@
 "use client";
 
-import { Badge, Button, EmptyState, Select, Skeleton } from "@form-forge/ui";
+import {
+  Badge,
+  Button,
+  EmptyState,
+  Input,
+  Select,
+  Skeleton,
+} from "@form-forge/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import {
   createColumnHelper,
@@ -17,6 +24,7 @@ import { LocalDateTime } from "@/components/local-date-time";
 type SubmissionRow = {
   createdAt: string;
   deliveryStatus: "pending" | "processing" | "succeeded" | "failed";
+  processingStatus: "new" | "processed";
   formId: string;
   formName: string;
   id: string;
@@ -48,6 +56,21 @@ export const SubmissionsTable = ({
 }) => {
   const [formId, setFormId] = useState("");
   const [status, setStatus] = useState("");
+  const [processingStatus, setProcessingStatus] = useState("");
+  const [filterDraft, setFilterDraft] = useState({
+    q: "",
+    from: "",
+    until: "",
+  });
+  const [filters, setFilters] = useState(filterDraft);
+  const [hiddenColumns, setHiddenColumns] = useState<string[]>([]);
+  const [valueColumns, setValueColumns] = useState<string[]>([]);
+  const appendFilters = (params: URLSearchParams) => {
+    if (processingStatus) params.set("processingStatus", processingStatus);
+    if (filters.q) params.set("q", filters.q);
+    if (filters.from) params.set("from", `${filters.from}T00:00:00Z`);
+    if (filters.until) params.set("until", `${filters.until}T00:00:00Z`);
+  };
   const query = useInfiniteQuery({
     initialPageParam: "",
     queryFn: async ({ pageParam }) => {
@@ -55,6 +78,7 @@ export const SubmissionsTable = ({
       if (pageParam) params.set("cursor", pageParam);
       if (formId) params.set("formId", formId);
       if (status) params.set("deliveryStatus", status);
+      appendFilters(params);
       const response = await fetch(
         `/api/admin/workspaces/${workspaceSlug}/submissions?${params}`,
       );
@@ -64,7 +88,14 @@ export const SubmissionsTable = ({
       );
     },
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-    queryKey: ["submissions", workspaceSlug, formId, status],
+    queryKey: [
+      "submissions",
+      workspaceSlug,
+      formId,
+      status,
+      processingStatus,
+      filters,
+    ],
   });
   const rows = useMemo(
     () => query.data?.pages.flatMap((page) => page.data) ?? [],
@@ -73,6 +104,7 @@ export const SubmissionsTable = ({
   const exportParams = new URLSearchParams();
   if (formId) exportParams.set("formId", formId);
   if (status) exportParams.set("deliveryStatus", status);
+  appendFilters(exportParams);
   const exportHref = `/api/admin/workspaces/${workspaceSlug}/submissions/export${
     exportParams.size > 0 ? `?${exportParams}` : ""
   }`;
@@ -90,36 +122,70 @@ export const SubmissionsTable = ({
           ),
           header: "Form",
         }),
-        columnHelper.accessor("versionNumber", {
-          cell: (cell) => `v${cell.getValue()}`,
-          header: "Version",
-        }),
-        columnHelper.accessor("normalizedValues", {
-          cell: (cell) => {
-            const preview = Object.entries(cell.getValue())
-              .slice(0, 2)
-              .map(([key, value]) => `${key}: ${String(value)}`)
-              .join(" · ");
-            return (
-              <span className="line-clamp-1 max-w-md text-slate-600">
-                {preview || "No values"}
-              </span>
-            );
-          },
-          header: "Values",
-        }),
-        columnHelper.accessor("deliveryStatus", {
-          cell: (cell) => (
-            <Badge tone={statusTone[cell.getValue()]}>{cell.getValue()}</Badge>
-          ),
-          header: "Delivery",
-        }),
-        columnHelper.accessor("createdAt", {
-          cell: (cell) => <LocalDateTime value={cell.getValue()} />,
-          header: "Received",
-        }),
+        ...(!hiddenColumns.includes("Version")
+          ? [
+              columnHelper.accessor("versionNumber", {
+                cell: (cell) => `v${cell.getValue()}`,
+                header: "Version",
+              }),
+            ]
+          : []),
+        ...(!hiddenColumns.includes("Values")
+          ? [
+              columnHelper.accessor("normalizedValues", {
+                cell: (cell) => {
+                  const preview = Object.entries(cell.getValue())
+                    .slice(0, 2)
+                    .map(([key, value]) => `${key}: ${String(value)}`)
+                    .join(" · ");
+                  return (
+                    <span className="line-clamp-1 max-w-md text-slate-600">
+                      {preview || "No values"}
+                    </span>
+                  );
+                },
+                header: "Values",
+              }),
+            ]
+          : []),
+        ...valueColumns.map((key) =>
+          columnHelper.accessor((row) => row.normalizedValues[key], {
+            id: `value:${key}`,
+            header: key,
+            cell: (cell) => String(cell.getValue() ?? ""),
+          }),
+        ),
+        ...(!hiddenColumns.includes("Processing")
+          ? [
+              columnHelper.accessor("processingStatus", {
+                header: "Processing",
+                cell: (cell) =>
+                  cell.getValue() === "processed" ? "Processed" : "New",
+              }),
+            ]
+          : []),
+        ...(!hiddenColumns.includes("Delivery")
+          ? [
+              columnHelper.accessor("deliveryStatus", {
+                cell: (cell) => (
+                  <Badge tone={statusTone[cell.getValue()]}>
+                    {cell.getValue()}
+                  </Badge>
+                ),
+                header: "Delivery",
+              }),
+            ]
+          : []),
+        ...(!hiddenColumns.includes("Received")
+          ? [
+              columnHelper.accessor("createdAt", {
+                cell: (cell) => <LocalDateTime value={cell.getValue()} />,
+                header: "Received",
+              }),
+            ]
+          : []),
       ]),
-    [workspaceSlug],
+    [workspaceSlug, hiddenColumns, valueColumns],
   );
   const table = useTable({
     features,
@@ -155,12 +221,120 @@ export const SubmissionsTable = ({
             </option>
           ))}
         </Select>
+        <Select
+          aria-label="Filter by processing status"
+          className="w-48"
+          value={processingStatus}
+          onChange={(event) => setProcessingStatus(event.target.value)}
+        >
+          <option value="">All processing statuses</option>
+          <option value="new">New</option>
+          <option value="processed">Processed</option>
+        </Select>
         <Button asChild className="ml-auto" variant="secondary">
           <a href={exportHref}>
             <Download className="size-4" /> Export CSV
           </a>
         </Button>
       </div>
+
+      <form
+        className="mb-4 flex flex-wrap items-end gap-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setFilters({ ...filterDraft, q: filterDraft.q.trim() });
+        }}
+      >
+        <label className="text-sm">
+          From (UTC, inclusive)
+          <Input
+            type="date"
+            value={filterDraft.from}
+            onChange={(event) =>
+              setFilterDraft({ ...filterDraft, from: event.target.value })
+            }
+          />
+        </label>
+        <label className="text-sm">
+          Until (UTC, exclusive)
+          <Input
+            type="date"
+            value={filterDraft.until}
+            onChange={(event) =>
+              setFilterDraft({ ...filterDraft, until: event.target.value })
+            }
+          />
+        </label>
+        <label className="text-sm">
+          Search answer words
+          <Input
+            type="search"
+            minLength={2}
+            maxLength={100}
+            value={filterDraft.q}
+            onChange={(event) =>
+              setFilterDraft({ ...filterDraft, q: event.target.value })
+            }
+          />
+        </label>
+        <Button type="submit" variant="secondary">
+          Apply filters
+        </Button>
+      </form>
+      <details className="mb-4 text-sm">
+        <summary className="cursor-pointer">Displayed columns</summary>
+        <p className="my-2 text-slate-600">
+          Form always stays visible. Select up to 20 answer columns from loaded
+          rows. CSV includes all answer fields matching the filters.
+        </p>
+        <div className="flex flex-wrap gap-4">
+          {["Version", "Values", "Processing", "Delivery", "Received"].map(
+            (column) => (
+              <label key={column} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={!hiddenColumns.includes(column)}
+                  onChange={(event) =>
+                    setHiddenColumns((current) =>
+                      event.target.checked
+                        ? current.filter((value) => value !== column)
+                        : [...current, column],
+                    )
+                  }
+                />
+                {column}
+              </label>
+            ),
+          )}
+          {Array.from(
+            new Set([
+              ...valueColumns,
+              ...rows.flatMap((row) => Object.keys(row.normalizedValues)),
+            ]),
+          )
+            .sort()
+            .slice(0, 500)
+            .map((key) => (
+              <label key={key} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={valueColumns.includes(key)}
+                  disabled={
+                    !valueColumns.includes(key) && valueColumns.length >= 20
+                  }
+                  onChange={(event) =>
+                    setValueColumns((current) =>
+                      event.target.checked
+                        ? [...current, key]
+                        : current.filter((value) => value !== key),
+                    )
+                  }
+                />
+                Answer: {key}
+              </label>
+            ))}
+        </div>
+      </details>
 
       {query.isPending ? (
         <div className="space-y-2">

@@ -1,0 +1,57 @@
+name: Monthly dependency review
+
+on:
+  schedule:
+    # First day of each month, 10:00 Europe/Moscow (07:00 UTC).
+    - cron: "0 7 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: monthly-dependency-review
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - name: Read outdated versions without installing dependencies
+        shell: bash
+        run: |
+          status=0
+          pnpm outdated --recursive --include-workspace-root --format json > "$RUNNER_TEMP/outdated.json" || status=$?
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          # Exit 1 also means "outdated". The script rejects empty/error output.
+          node .github/scripts/dependency-review.mjs "$RUNNER_TEMP/outdated.json" > "$RUNNER_TEMP/dependency-review.md"
+          cat "$RUNNER_TEMP/dependency-review.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open this month's review issue if absent
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          export REVIEW_TITLE="Dependency review: $(date -u +%Y-%m)"
+          issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --author 'github-actions[bot]' --state all --search "$REVIEW_TITLE in:title" --json number,title --jq '.[] | select(.title == env.REVIEW_TITLE) | .number' | head -n 1)
+          if [ -n "$issue" ]; then
+            # Preserve review notes, checkboxes and closed/deferred decisions.
+            echo "Monthly review already exists: #$issue"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$REVIEW_TITLE" --body-file "$RUNNER_TEMP/dependency-review.md"
+          fi

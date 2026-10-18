@@ -1,5 +1,5 @@
 import { submissionRequestSchema } from "@form-forge/form-schema";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { apiError, MAX_SUBMISSION_BODY_BYTES, parseJsonBody } from "@/lib/api";
@@ -8,6 +8,7 @@ import { trustedForwardedFor } from "@/lib/request-fingerprint";
 import { env } from "@/env";
 import { receiveSubmission } from "@/services/public-forms";
 import { limitSubmitRequest } from "@/services/usage";
+import { dispatchSubmissionOutbox } from "@/services/outbox";
 
 const idempotencyKeySchema = z.string().min(1).max(200);
 
@@ -44,6 +45,13 @@ export const POST = async (
       slug,
       ...(userAgent === undefined ? {} : { userAgent }),
     });
+    try {
+      after(async () => {
+        await dispatchSubmissionOutbox(result.id);
+      });
+    } catch {
+      // Adapters without after/waitUntil support still have durable cron recovery.
+    }
     return NextResponse.json(
       {
         data: {

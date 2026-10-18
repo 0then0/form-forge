@@ -11,6 +11,13 @@ export const deliveryRequested = eventType("form-forge/delivery.requested", {
 });
 
 export const inngest = new Inngest({
+  fetch: (input, init) =>
+    fetch(input, {
+      ...init,
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, AbortSignal.timeout(2_000)])
+        : AbortSignal.timeout(2_000),
+    }),
   eventKey: env.INNGEST_EVENT_KEY,
   id: "form-forge",
 });

@@ -1,22 +1,13 @@
 import { NextResponse } from "next/server";
 
-import { env } from "@/env";
+import { isAdminRequestOriginAllowed } from "@/auth/request-origin";
 
 export const config = { matcher: "/api/admin/:path*" };
 
 export function proxy(request: Request) {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method))
     return NextResponse.next();
-  const origin = request.headers.get("origin");
-  const site = request.headers.get("sec-fetch-site");
-  // Keep browser-driven admin mutations bound to our own origin; OAuth callbacks
-  // use NextAuth checks.
-  // Non-browser API clients without Origin/Fetch Metadata remain supported.
-  if (
-    (origin !== null && origin !== new URL(env.NEXTAUTH_URL).origin) ||
-    site === "cross-site" ||
-    (origin === null && site === "same-site")
-  ) {
+  if (!isAdminRequestOriginAllowed(request)) {
     return NextResponse.json(
       {
         error: {

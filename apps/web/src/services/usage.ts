@@ -67,4 +67,36 @@ export const limitSubmitRequest = async (address?: string) => {
 
 export const removeExpiredUsage = async () => {
   await db.execute(sql`delete from usage_buckets where expires_at <= now()`);
+  await db.execute(
+    sql`delete from deleted_submission_keys where expires_at <= now()`,
+  );
+};
+
+// At most 20 short-lived, form-scoped markers per subject; no response ID or IP.
+// Keeping timestamps separately preserves the existing rolling 10-minute budget
+// without retaining a visitor fingerprint in the submitted response.
+export const consumeSubmissionRate = async (
+  executor: Pick<typeof db, "execute">,
+  formId: string,
+  source: string,
+) => {
+  const subject = createHmac("sha256", env.FINGERPRINT_SECRET)
+    .update(`spam:${formId}:${source}`)
+    .digest("hex");
+  const prefix = `spam:${subject}:`;
+  await executor.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended(${prefix}, 0))`,
+  );
+  const result = await executor.execute<{ count: number }>(sql`
+    select count(*)::int as count from usage_buckets
+    where key like ${`${prefix}%`} and expires_at > now()
+  `);
+  if ((result.rows[0]?.count ?? 0) >= 20)
+    throw new AppError(
+      "RATE_LIMITED",
+      "Too many submissions. Please try again later.",
+      429,
+    );
+  await executor.execute(sql`insert into usage_buckets (key, count, expires_at)
+    values (${`${prefix}${crypto.randomUUID()}`}, 1, now() + interval '10 minutes')`);
 };

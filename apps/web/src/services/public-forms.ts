@@ -12,6 +12,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import { db } from "@/db/client";
 import {
+  deletedSubmissionKeys,
   forms,
   formVersions,
   outboxEvents,
@@ -25,7 +26,9 @@ import {
   MAX_DAILY_SUBMISSIONS,
   MAX_DAILY_DELIVERIES,
 } from "@/lib/usage-policy";
-import { consumeUsage } from "./usage";
+import { consumeUsage, consumeSubmissionRate } from "./usage";
+import { isIntakeClosed } from "@/lib/form-policy";
+import { hashDeletedSubmissionKey } from "@/lib/deleted-submission-key";
 
 const hashFingerprint = (value: string): string =>
   createHmac("sha256", env.FINGERPRINT_SECRET).update(value).digest("hex");
@@ -33,6 +36,12 @@ const hashFingerprint = (value: string): string =>
 export const getPublishedForm = async (slug: string, versionId?: string) => {
   const [form] = await db
     .select({
+      paused: forms.paused,
+      closesAt: forms.closesAt,
+      maxAccepted: forms.maxAccepted,
+      acceptedCount: forms.acceptedCount,
+      closedMessage: forms.closedMessage,
+      collectMetadata: forms.collectMetadata,
       id: forms.id,
       name: forms.name,
       publishedVersionId: forms.publishedVersionId,
@@ -42,7 +51,7 @@ export const getPublishedForm = async (slug: string, versionId?: string) => {
     .from(forms)
     .where(eq(forms.slug, slug))
     .limit(1);
-  if (!form || form.status !== "published" || !form.publishedVersionId) {
+  if (form?.status !== "published" || !form.publishedVersionId) {
     throw notFoundError("Published form not found");
   }
 
@@ -65,7 +74,17 @@ export const getPublishedForm = async (slug: string, versionId?: string) => {
   if (!version) throw notFoundError("Published form version not found");
 
   return {
-    form: { id: form.id, name: form.name, slug: form.slug },
+    form: {
+      id: form.id,
+      name: form.name,
+      slug: form.slug,
+      collectMetadata: form.collectMetadata,
+    },
+    intake: {
+      closed: isIntakeClosed(form),
+      closesAt: form.closesAt?.toISOString() ?? null,
+      message: form.closedMessage,
+    },
     version: { ...version, schema: formSchemaV1Schema.parse(version.schema) },
   };
 };
@@ -134,34 +153,6 @@ export const receiveSubmission = async ({
     ? hashFingerprint(fingerprintSource)
     : null;
 
-  const [previous] = await db
-    .select({
-      formVersionId: submissions.formVersionId,
-      id: submissions.id,
-      receivedValues: submissions.receivedValues,
-    })
-    .from(submissions)
-    .where(
-      and(
-        eq(submissions.formId, published.form.id),
-        eq(submissions.idempotencyKey, idempotencyKey),
-      ),
-    )
-    .limit(1);
-  if (previous) {
-    if (
-      previous.formVersionId !== published.version.id ||
-      !isDeepStrictEqual(previous.receivedValues, normalized.receivedValues)
-    ) {
-      throw new AppError(
-        "CONFLICT",
-        "This idempotency key was already used for a different submission",
-        409,
-      );
-    }
-    return { id: previous.id, duplicate: true };
-  }
-
   const utm = Object.fromEntries(
     Object.entries(parsedInput.context?.utm ?? {}).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
@@ -170,23 +161,35 @@ export const receiveSubmission = async ({
 
   return db.transaction(async (tx) => {
     const [activeForm] = await tx
-      .select({
-        status: forms.status,
-        workspaceId: forms.workspaceId,
-      })
+      .select()
       .from(forms)
       .where(eq(forms.id, published.form.id))
       .limit(1)
       .for("update");
-    if (!activeForm || activeForm.status !== "published") {
+    if (activeForm?.status !== "published") {
       throw notFoundError("Published form not found");
     }
 
-    if (fingerprintHash) {
-      await tx.execute(
-        sql`select pg_advisory_xact_lock(hashtextextended(${`${published.form.id}:${fingerprintHash}`}, 0))`,
+    const [deleted] = await tx
+      .select({ keyHash: deletedSubmissionKeys.keyHash })
+      .from(deletedSubmissionKeys)
+      .where(
+        and(
+          eq(deletedSubmissionKeys.formId, published.form.id),
+          eq(
+            deletedSubmissionKeys.keyHash,
+            hashDeletedSubmissionKey(published.form.id, idempotencyKey),
+          ),
+          gt(deletedSubmissionKeys.expiresAt, new Date()),
+        ),
+      )
+      .limit(1);
+    if (deleted)
+      throw new AppError(
+        "CONFLICT",
+        "This submission was deleted. Its idempotency key cannot be reused for 30 days.",
+        409,
       );
-    }
 
     const [existingSubmission] = await tx
       .select({
@@ -219,7 +222,25 @@ export const receiveSubmission = async ({
       return { id: existingSubmission.id, duplicate: true };
     }
 
-    await enforceSubmissionRate(tx, published.form.id, fingerprintHash);
+    // The form row lock serializes admission with policy changes and deletion.
+    // Idempotent successes above remain successful even when intake has closed.
+    const clock = await tx.execute<{ epochMs: string }>(
+      sql`select extract(epoch from clock_timestamp()) * 1000 as "epochMs"`,
+    );
+    if (
+      isIntakeClosed(
+        activeForm,
+        new Date(Number(clock.rows[0]?.epochMs ?? Date.now())),
+      )
+    ) {
+      throw new AppError("CONFLICT", activeForm.closedMessage, 409);
+    }
+
+    if (activeForm.collectMetadata) {
+      await enforceSubmissionRate(tx, published.form.id, fingerprintHash);
+    }
+    if (fingerprintSource)
+      await consumeSubmissionRate(tx, published.form.id, fingerprintSource);
 
     const endpointIds = await tx
       .select({ id: webhookEndpoints.id })
@@ -249,15 +270,19 @@ export const receiveSubmission = async ({
       .insert(submissions)
       .values({
         deliveryStatus: "pending",
-        fingerprintHash,
+        fingerprintHash: activeForm.collectMetadata ? fingerprintHash : null,
         formId: published.form.id,
         formVersionId: published.version.id,
         idempotencyKey,
         normalizedValues: normalized.normalizedValues,
         receivedValues: normalized.receivedValues,
-        referrer: parsedInput.context?.referrer?.slice(0, 2_000),
-        userAgent: userAgent?.slice(0, 1_000),
-        utm,
+        referrer: activeForm.collectMetadata
+          ? parsedInput.context?.referrer?.slice(0, 2_000)
+          : null,
+        userAgent: activeForm.collectMetadata
+          ? userAgent?.slice(0, 1_000)
+          : null,
+        utm: activeForm.collectMetadata ? utm : {},
       })
       .onConflictDoNothing({
         target: [submissions.formId, submissions.idempotencyKey],
@@ -294,6 +319,10 @@ export const receiveSubmission = async ({
       return { id: existing.id, duplicate: true };
     }
 
+    await tx
+      .update(forms)
+      .set({ acceptedCount: sql`${forms.acceptedCount} + 1` })
+      .where(eq(forms.id, published.form.id));
     await tx.insert(submissionEvents).values({
       data: { formVersionId: published.version.id },
       submissionId: created.id,

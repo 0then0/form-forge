@@ -63,7 +63,11 @@ export const POST = async (request: Request) => {
       .set({ availableAt: dueAt, status: "pending" })
       .where(
         and(
-          eq(outboxEvents.type, "delivery.requested"),
+          inArray(outboxEvents.type, [
+            "submission.received",
+            "delivery.requested",
+            "delivery.retry_requested",
+          ]),
           inArray(outboxEvents.status, ["pending", "failed"]),
         ),
       );

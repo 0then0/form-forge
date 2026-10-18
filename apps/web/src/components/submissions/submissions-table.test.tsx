@@ -72,7 +72,14 @@ test("renders submission cells, appends pages and applies server filters to CSV 
   expect(within(row).getByText("succeeded")).toBeVisible();
   expect(
     screen.getAllByRole("columnheader").map((cell) => cell.textContent),
-  ).toEqual(["Form", "Version", "Values", "Delivery", "Received"]);
+  ).toEqual([
+    "Form",
+    "Version",
+    "Values",
+    "Processing",
+    "Delivery",
+    "Received",
+  ]);
 
   await user.click(screen.getByRole("button", { name: "Load more" }));
   expect(

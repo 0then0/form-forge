@@ -4,6 +4,16 @@ import { defaultFormSchema, type FormSchemaV1 } from "@form-forge/form-schema";
 import { and, count, eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { createHash, createHmac } from "node:crypto";
+import {
+  readFile,
+  mkdtemp,
+  mkdir,
+  copyFile,
+  writeFile,
+  rm,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -18,9 +28,12 @@ vi.mock("@/auth/session", () => ({
   })),
 }));
 
+import { POST as submitRoute } from "../../app/api/forms/[slug]/submit/route";
+import { inngest } from "@/inngest/client";
 import { db } from "@/db/client";
 import {
   auditLogs,
+  deletedSubmissionKeys,
   deliveryAttempts,
   forms,
   formVersions,
@@ -42,6 +55,7 @@ import {
   requestManualRetry,
 } from "@/services/deliveries";
 import {
+  updateFormPolicy,
   getForm,
   getFormForViewing,
   archiveForm,
@@ -57,6 +71,7 @@ import {
 } from "@/services/forms";
 import { updateMember } from "@/services/memberships";
 import {
+  dispatchSubmissionOutbox,
   dispatchPendingOutbox,
   enqueueDueDeliveries,
   enqueueUnprocessedSubmissions,
@@ -70,6 +85,8 @@ import {
 import { inspectPipelineHealth } from "@/services/pipeline-health";
 import { reconcileSubmissionDeliveryStatus } from "@/services/submission-delivery-status";
 import {
+  deleteSubmission,
+  updateSubmissionStatus,
   exportSubmissionsCsv,
   getSubmissionDetail,
   listSubmissions,
@@ -134,11 +151,13 @@ const seedWorkspace = async (role: "owner" | "editor" | "viewer" = "owner") => {
 
 const seedForm = async ({
   formSchema = schema(),
+  collectMetadata = true,
   published = true,
   workspaceId,
   userId,
 }: {
   formSchema?: FormSchemaV1;
+  collectMetadata?: boolean;
   published?: boolean;
   userId: string;
   workspaceId: string;
@@ -146,6 +165,7 @@ const seedForm = async ({
   const [form] = await db
     .insert(forms)
     .values({
+      collectMetadata,
       createdBy: userId,
       draftSchema: formSchema,
       name: formSchema.title,
@@ -180,7 +200,79 @@ integration("submission and delivery pipeline", () => {
     await db.execute(sql`drop schema if exists drizzle cascade`);
     await db.execute(sql`drop schema if exists public cascade`);
     await db.execute(sql`create schema public`);
-    await migrate(db, { migrationsFolder });
+    const previousFolder = await mkdtemp(
+      join(tmpdir(), "ff-previous-migrations-"),
+    );
+    try {
+      await mkdir(join(previousFolder, "meta"));
+      const journal = JSON.parse(
+        await readFile(join(migrationsFolder, "meta/_journal.json"), "utf8"),
+      );
+      journal.entries = journal.entries.filter(
+        (entry: { idx: number }) => entry.idx < 6,
+      );
+      await writeFile(
+        join(previousFolder, "meta/_journal.json"),
+        JSON.stringify(journal),
+      );
+      for (const entry of journal.entries)
+        await copyFile(
+          join(migrationsFolder, `${entry.tag}.sql`),
+          join(previousFolder, `${entry.tag}.sql`),
+        );
+      await migrate(db, { migrationsFolder: previousFolder });
+      // Seed actual pre-upgrade rows, which do not have any operational columns.
+      const legacySchema = schema();
+      const legacyUser = crypto.randomUUID();
+      const legacyWorkspace = crypto.randomUUID();
+      const legacyForm = crypto.randomUUID();
+      const legacyVersion = crypto.randomUUID();
+      await db.execute(
+        sql`insert into users (id, email) values (${legacyUser}, 'legacy@example.com')`,
+      );
+      await db.execute(
+        sql`insert into workspaces (id, name, slug) values (${legacyWorkspace}, 'Legacy', 'legacy')`,
+      );
+      await db.execute(
+        sql`insert into forms (id, workspace_id, created_by, name, slug, draft_schema, status) values (${legacyForm}, ${legacyWorkspace}, ${legacyUser}, 'Legacy', 'legacy-form', ${JSON.stringify(legacySchema)}::jsonb, 'published')`,
+      );
+      await db.execute(
+        sql`insert into form_versions (id, form_id, version_number, schema, schema_hash, published_by) values (${legacyVersion}, ${legacyForm}, 1, ${JSON.stringify(legacySchema)}::jsonb, ${schemaHash(legacySchema)}, ${legacyUser})`,
+      );
+      await db.execute(
+        sql`update forms set published_version_id = ${legacyVersion} where id = ${legacyForm}`,
+      );
+      await db.execute(
+        sql`insert into submissions (form_id, form_version_id, received_values, normalized_values, utm, idempotency_key, referrer, user_agent) values (${legacyForm}, ${legacyVersion}, '{"name":"Historical"}', '{"name":"Historical"}', '{"utm_source":"legacy"}', 'legacy', 'https://legacy.example', 'legacy-agent')`,
+      );
+      await migrate(db, { migrationsFolder });
+      expect(
+        await db.select().from(forms).where(eq(forms.id, legacyForm)),
+      ).toMatchObject([
+        {
+          collectMetadata: true,
+          acceptedCount: 1,
+          paused: false,
+          closesAt: null,
+          maxAccepted: null,
+        },
+      ]);
+      expect((await getPublishedForm("legacy-form")).version.schema).toEqual(
+        legacySchema,
+      );
+      expect(await db.select().from(submissions)).toMatchObject([
+        {
+          receivedValues: { name: "Historical" },
+          normalizedValues: { name: "Historical" },
+          utm: { utm_source: "legacy" },
+          referrer: "https://legacy.example",
+          userAgent: "legacy-agent",
+          processingStatus: "new",
+        },
+      ]);
+    } finally {
+      await rm(previousFolder, { recursive: true, force: true });
+    }
   });
 
   beforeEach(async () => {
@@ -627,7 +719,7 @@ integration("submission and delivery pipeline", () => {
       hasActiveAttemptUrl: true,
       hasLease: true,
       hasRequestUrl: true,
-      tableCount: 16,
+      tableCount: 17,
     });
   });
 
@@ -649,12 +741,19 @@ integration("submission and delivery pipeline", () => {
     });
     const resetLastMigration = async () => {
       await db.execute(sql`drop table usage_buckets`);
-      await db.execute(
-        sql`delete from drizzle.__drizzle_migrations where created_at = (select max(created_at) from drizzle.__drizzle_migrations)`,
+    };
+    const replayUsageMigration = async () => {
+      const source = await readFile(
+        `${migrationsFolder}/0005_loving_lily_hollister.sql`,
+        "utf8",
       );
+      await db.transaction(async (tx) => {
+        for (const statement of source.split("--> statement-breakpoint"))
+          await tx.execute(sql.raw(statement));
+      });
     };
     await resetLastMigration();
-    await migrate(db, { migrationsFolder });
+    await replayUsageMigration();
     expect(
       await db
         .select()
@@ -681,7 +780,7 @@ integration("submission and delivery pipeline", () => {
       .returning({ id: webhookEndpoints.id });
     await resetLastMigration();
     try {
-      await expect(migrate(db, { migrationsFolder })).rejects.toThrow();
+      await expect(replayUsageMigration()).rejects.toThrow();
       expect(
         await db
           .select()
@@ -695,7 +794,7 @@ integration("submission and delivery pipeline", () => {
           .update(webhookEndpoints)
           .set({ archivedAt: new Date() })
           .where(eq(webhookEndpoints.id, last.id));
-      await migrate(db, { migrationsFolder });
+      await replayUsageMigration();
     }
     expect(await db.select().from(submissions)).toHaveLength(1);
   });
@@ -2359,6 +2458,808 @@ integration("submission and delivery pipeline", () => {
       .from(deliveryAttempts)
       .where(eq(deliveryAttempts.deliveryId, delivery.id));
     expect(attempt?.errorCode).toBe("CONFIGURATION_ERROR");
+  });
+  test("new forms default to private metadata and direct API input cannot bypass it", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const created = await createForm(workspace.slug, "Private form");
+    expect(created.collectMetadata).toBe(false);
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+      collectMetadata: false,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    const direct = await submitRoute(
+      new Request(
+        `http://localhost:3000/api/forms/${seeded.form.slug}/submit`,
+        {
+          method: "POST",
+          headers: {
+            "Idempotency-Key": "direct-private",
+            "User-Agent": "direct-agent",
+          },
+          body: JSON.stringify({
+            versionId: seeded.version.id,
+            values: { name: "Direct API" },
+            context: {
+              visitorId: "direct-visitor",
+              referrer: "https://direct.example",
+              utm: { utm_source: "direct" },
+            },
+          }),
+        },
+      ),
+      { params: Promise.resolve({ slug: seeded.form.slug }) },
+    );
+    expect(direct.status).toBe(201);
+    const directId = (await direct.json()).data.submissionId;
+    expect(
+      await db.select().from(submissions).where(eq(submissions.id, directId)),
+    ).toMatchObject([
+      { fingerprintHash: null, userAgent: null, referrer: null, utm: {} },
+    ]);
+    const response = await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "private",
+      fallbackFingerprint: "203.0.113.5",
+      userAgent: "private-agent",
+      input: {
+        versionId: seeded.version.id,
+        values: { name: "Ada" },
+        context: {
+          visitorId: "persistent-visitor",
+          referrer: "https://example.com",
+          utm: { utm_source: "private" },
+        },
+      },
+    });
+    const [saved] = await db
+      .select()
+      .from(submissions)
+      .where(eq(submissions.id, response.id));
+    expect(saved).toMatchObject({
+      fingerprintHash: null,
+      userAgent: null,
+      referrer: null,
+      utm: {},
+    });
+    const markers = await db
+      .select()
+      .from(usageBuckets)
+      .where(sql`key like 'spam:%'`);
+    expect(markers).toHaveLength(2);
+    expect(JSON.stringify(markers)).not.toContain("203.0.113.5");
+    expect(JSON.stringify(markers)).not.toContain(response.id);
+    await db.update(usageBuckets).set({ expiresAt: new Date(0) });
+    await removeExpiredUsage();
+    expect(await db.select().from(usageBuckets)).toHaveLength(0);
+  });
+
+  test("disabled metadata still enforces the rolling anti-spam budget under concurrency", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+      collectMetadata: false,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    const versionId = seeded.version.id;
+    const results = await Promise.allSettled(
+      Array.from({ length: 22 }, (_, index) =>
+        receiveSubmission({
+          slug: seeded.form.slug,
+          fallbackFingerprint: "203.0.113.6",
+          idempotencyKey: `private-${index}`,
+          input: { versionId, values: { name: "Ada" } },
+        }),
+      ),
+    );
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(20);
+    expect(
+      results.filter(
+        (result) =>
+          result.status === "rejected" && result.reason.code === "RATE_LIMITED",
+      ),
+    ).toHaveLength(2);
+    expect(
+      (await db.select().from(submissions)).every(
+        (row) => row.fingerprintHash === null,
+      ),
+    ).toBe(true);
+  });
+
+  test("fast dispatch survives an Inngest outage and cron races without duplicate logical events", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    const input = { versionId: seeded.version.id, values: { name: "Ada" } };
+    const first = await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "fast",
+      input,
+    });
+    const backlog = await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "backlog",
+      input,
+    });
+    const spy = vi
+      .spyOn(inngest, "send")
+      .mockRejectedValue(new Error("scheduler offline"));
+    try {
+      expect(await dispatchSubmissionOutbox(first.id)).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await db.select().from(submissions)).toHaveLength(2);
+    expect(
+      await db
+        .select()
+        .from(outboxEvents)
+        .where(eq(outboxEvents.aggregateId, first.id)),
+    ).toMatchObject([{ status: "failed", attempts: 1 }]);
+    expect(
+      await db
+        .select()
+        .from(outboxEvents)
+        .where(eq(outboxEvents.aggregateId, backlog.id)),
+    ).toMatchObject([{ status: "pending", attempts: 0 }]);
+    await db.update(outboxEvents).set({ availableAt: new Date(0) });
+    const sender = vi.fn(async () => undefined);
+    await Promise.all([
+      dispatchPendingOutbox(1, sender, [first.id]),
+      dispatchPendingOutbox(50, sender),
+    ]);
+    expect(sender).toHaveBeenCalledTimes(2);
+    const eventIds = sender.mock.calls.map(
+      (call) => (call as unknown as [{ id: string }])[0].id,
+    );
+    expect(new Set(eventIds).size).toBe(2);
+    await Promise.all([
+      createDeliveriesForSubmission(first.id),
+      createDeliveriesForSubmission(first.id),
+    ]);
+    expect(
+      await db
+        .select()
+        .from(submissionEvents)
+        .where(eq(submissionEvents.type, "delivery.not_configured")),
+    ).toHaveLength(1);
+  });
+
+  test("the second-stage fast path dispatches only the new submission's deliveries", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    await createWebhookEndpoint(workspace.slug, seeded.form.id, {
+      name: "Receiver",
+      url: "https://receiver.example.org",
+    });
+    const first = await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "second-stage",
+      input: { versionId: seeded.version.id, values: { name: "Ada" } },
+    });
+    await dispatchPendingOutbox(1, async () => undefined, [first.id]);
+    await createDeliveriesForSubmission(first.id);
+    const sender = vi.spyOn(inngest, "send").mockResolvedValue({ ids: [] });
+    try {
+      expect(await dispatchSubmissionOutbox(first.id)).toBe(1);
+      expect(sender).toHaveBeenCalledOnce();
+    } finally {
+      sender.mockRestore();
+    }
+    expect(
+      await db
+        .select()
+        .from(outboxEvents)
+        .where(eq(outboxEvents.type, "delivery.requested")),
+    ).toMatchObject([{ status: "sent" }]);
+  });
+
+  test("admission serializes the last place, preserves duplicates, and closes old versions immediately", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    const originalVersion = seeded.version.id;
+    const [policy] = await db
+      .select()
+      .from(forms)
+      .where(eq(forms.id, seeded.form.id));
+    if (!policy) throw new Error("Missing form");
+    await updateFormPolicy(workspace.slug, seeded.form.id, {
+      expectedRevision: policy.policyUpdatedAt.toISOString(),
+      policy: {
+        collectMetadata: false,
+        paused: false,
+        closesAt: null,
+        maxAccepted: 1,
+        closedMessage: "All places taken",
+      },
+    });
+    const input = { versionId: originalVersion, values: { name: "Ada" } };
+    const results = await Promise.allSettled(
+      ["last-a", "last-b"].map((idempotencyKey) =>
+        receiveSubmission({ slug: seeded.form.slug, idempotencyKey, input }),
+      ),
+    );
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      results.filter(
+        (result) =>
+          result.status === "rejected" &&
+          result.reason.message === "All places taken",
+      ),
+    ).toHaveLength(1);
+    const [saved] = await db.select().from(submissions);
+    if (!saved) throw new Error("Missing response");
+    expect(
+      await receiveSubmission({
+        slug: seeded.form.slug,
+        idempotencyKey: saved.idempotencyKey,
+        input,
+      }),
+    ).toMatchObject({ duplicate: true });
+    await deleteSubmission(workspace.slug, saved.id, saved.id);
+    expect(
+      await db.select().from(forms).where(eq(forms.id, seeded.form.id)),
+    ).toMatchObject([{ acceptedCount: 1 }]);
+    await expect(
+      receiveSubmission({
+        slug: seeded.form.slug,
+        idempotencyKey: "still-full",
+        input,
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    await db
+      .update(forms)
+      .set({ maxAccepted: null, paused: true, closedMessage: "Paused" })
+      .where(eq(forms.id, seeded.form.id));
+    const newerSchema = { ...seeded.schema, title: "New version" };
+    await publishForm(workspace.slug, seeded.form.id, {
+      expectedRevision: seeded.form.updatedAt.toISOString(),
+      schema: newerSchema,
+    });
+    await expect(
+      receiveSubmission({
+        slug: seeded.form.slug,
+        idempotencyKey: "old-tab-paused",
+        input,
+      }),
+    ).rejects.toMatchObject({ message: "Paused" });
+    await db
+      .update(forms)
+      .set({ paused: false, closesAt: new Date(Date.now() - 1_000) })
+      .where(eq(forms.id, seeded.form.id));
+    await expect(
+      receiveSubmission({
+        slug: seeded.form.slug,
+        idempotencyKey: "old-tab-timed",
+        input,
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    await db
+      .update(forms)
+      .set({ closesAt: null })
+      .where(eq(forms.id, seeded.form.id));
+    expect(
+      await receiveSubmission({
+        slug: seeded.form.slug,
+        idempotencyKey: "old-tab-resumed",
+        input,
+      }),
+    ).toMatchObject({ duplicate: false });
+    expect(
+      (await getPublishedForm(seeded.form.slug, originalVersion)).version
+        .schema,
+    ).toEqual(seeded.schema);
+  });
+
+  test("deletion atomically removes associated data, retains endpoints, quotas and minimal expiring tombstones", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    await createWebhookEndpoint(workspace.slug, seeded.form.id, {
+      name: "Receiver",
+      url: "https://receiver.example.org",
+    });
+    const input = {
+      versionId: seeded.version.id,
+      values: { name: "Sensitive value" },
+    };
+    const saved = await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "sensitive-key",
+      input,
+    });
+    await createDeliveriesForSubmission(saved.id);
+    const [delivery] = await db.select().from(webhookDeliveries);
+    if (!delivery) throw new Error("Missing delivery");
+    await deliverWebhook(delivery.id, async () => ({
+      ok: true,
+      status: 200,
+      responseExcerpt: "ok",
+    }));
+    const usage = await db.select().from(usageBuckets);
+    await expect(
+      deleteSubmission(workspace.slug, saved.id, "wrong"),
+    ).rejects.toMatchObject({ status: 422 });
+    await db.execute(
+      sql`alter table audit_logs add constraint reject_delete_audit check (action <> 'submission.deleted')`,
+    );
+    try {
+      await expect(
+        deleteSubmission(workspace.slug, saved.id, saved.id),
+      ).rejects.toThrow();
+      expect(await db.select().from(submissions)).toHaveLength(1);
+      expect(await db.select().from(deliveryAttempts)).toHaveLength(1);
+      expect(await db.select().from(deletedSubmissionKeys)).toHaveLength(0);
+    } finally {
+      await db.execute(
+        sql`alter table audit_logs drop constraint reject_delete_audit`,
+      );
+    }
+    await deleteSubmission(workspace.slug, saved.id, saved.id);
+    expect(await db.select().from(submissions)).toHaveLength(0);
+    expect(await db.select().from(webhookDeliveries)).toHaveLength(0);
+    expect(await db.select().from(deliveryAttempts)).toHaveLength(0);
+    expect(await db.select().from(submissionEvents)).toHaveLength(0);
+    expect(await db.select().from(outboxEvents)).toHaveLength(0);
+    expect(await db.select().from(webhookEndpoints)).toHaveLength(1);
+    expect(await db.select().from(usageBuckets)).toEqual(usage);
+    const tombstones = await db.select().from(deletedSubmissionKeys);
+    expect(tombstones).toHaveLength(1);
+    expect(tombstones[0]?.keyHash).toMatch(/^[a-f0-9]{64}$/);
+    const remaining = JSON.stringify([
+      ...tombstones,
+      ...(await db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.action, "submission.deleted"))),
+    ]);
+    expect(remaining).not.toContain("Sensitive value");
+    expect(remaining).not.toContain("sensitive-key");
+    await expect(
+      receiveSubmission({
+        slug: seeded.form.slug,
+        idempotencyKey: "sensitive-key",
+        input,
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining("deleted"),
+    });
+    await db.update(deletedSubmissionKeys).set({ expiresAt: new Date(0) });
+    await removeExpiredUsage();
+    expect(await db.select().from(deletedSubmissionKeys)).toHaveLength(0);
+    expect(
+      await receiveSubmission({
+        slug: seeded.form.slug,
+        idempotencyKey: "sensitive-key",
+        input,
+      }),
+    ).toMatchObject({ duplicate: false });
+  });
+
+  test("deletion conflicts with delivery creation and in-flight HTTP, then succeeds after locks and leases release", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    await createWebhookEndpoint(workspace.slug, seeded.form.id, {
+      name: "Receiver",
+      url: "https://receiver.example.org",
+    });
+    const saved = await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "delete-race",
+      input: { versionId: seeded.version.id, values: { name: "Ada" } },
+    });
+    await db.transaction(async (tx) => {
+      await tx
+        .select()
+        .from(submissions)
+        .where(eq(submissions.id, saved.id))
+        .for("update");
+      await expect(
+        deleteSubmission(workspace.slug, saved.id, saved.id),
+      ).rejects.toMatchObject({ status: 409 });
+      // Deletion's form lock must have rolled back before the error is returned.
+      await tx
+        .select()
+        .from(forms)
+        .where(eq(forms.id, seeded.form.id))
+        .for("update", { noWait: true });
+    });
+    await createDeliveriesForSubmission(saved.id);
+    const [delivery] = await db.select().from(webhookDeliveries);
+    if (!delivery) throw new Error("Missing delivery");
+    let release!: () => void;
+    let started!: () => void;
+    const start = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sending = deliverWebhook(delivery.id, async () => {
+      started();
+      await gate;
+      return { ok: true, status: 200, responseExcerpt: "ok" };
+    });
+    await start;
+    try {
+      await expect(
+        deleteSubmission(workspace.slug, saved.id, saved.id),
+      ).rejects.toMatchObject({ status: 409 });
+    } finally {
+      release();
+      await sending;
+    }
+    await deleteSubmission(workspace.slug, saved.id, saved.id);
+    await expect(createDeliveriesForSubmission(saved.id)).rejects.toMatchObject(
+      { status: 404 },
+    );
+    expect(await db.select().from(submissions)).toHaveLength(0);
+  });
+
+  test("deletion conflicts with cron between due selection and outbox insertion, then retries without orphan work", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    await createWebhookEndpoint(workspace.slug, seeded.form.id, {
+      name: "Receiver",
+      url: "https://receiver.example.org",
+    });
+    const saved = await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "delete-cron-race",
+      input: { versionId: seeded.version.id, values: { name: "Ada" } },
+    });
+    await createDeliveriesForSubmission(saved.id);
+    const [delivery] = await db.select().from(webhookDeliveries);
+    if (!delivery) throw new Error("Missing delivery");
+    await db
+      .delete(outboxEvents)
+      .where(eq(outboxEvents.aggregateId, delivery.id));
+
+    // Hold a test-only advisory lock at INSERT, after the real cron service has
+    // selected its due rows. No timers or production hooks choose the ordering.
+    await db.execute(sql`
+      create function test_gate_outbox_insert() returns trigger language plpgsql as $$
+      begin
+        perform pg_advisory_xact_lock(871204, 1);
+        return NEW;
+      end;
+      $$
+    `);
+    await db.execute(sql`
+      create trigger test_gate_outbox_insert before insert on outbox_events
+      for each row execute function test_gate_outbox_insert()
+    `);
+    let recovery: Promise<PromiseSettledResult<number>[]> | undefined;
+    try {
+      await db.transaction(async (guard) => {
+        await guard.execute(sql`select pg_advisory_xact_lock(871204, 1)`);
+        recovery = Promise.allSettled([enqueueDueDeliveries()]);
+        await expect
+          .poll(async () => {
+            const waiting = await db.execute<{ count: number }>(sql`
+              select count(*)::int as count from pg_locks
+              where locktype = 'advisory' and not granted
+                and classid = 871204 and objid = 1
+                and database = (select oid from pg_database where datname = current_database())
+            `);
+            return waiting.rows[0]?.count;
+          })
+          .toBe(1);
+        await expect(
+          deleteSubmission(workspace.slug, saved.id, saved.id),
+        ).rejects.toMatchObject({ status: 409 });
+        expect(await db.select().from(deletedSubmissionKeys)).toHaveLength(0);
+        // A failed deletion must release its earlier form/submission locks.
+        await guard
+          .select()
+          .from(forms)
+          .where(eq(forms.id, seeded.form.id))
+          .for("update", { noWait: true });
+        await guard
+          .select()
+          .from(submissions)
+          .where(eq(submissions.id, saved.id))
+          .for("update", { noWait: true });
+      });
+      expect(await recovery).toEqual([{ status: "fulfilled", value: 1 }]);
+      await deleteSubmission(workspace.slug, saved.id, saved.id);
+      expect(await db.select().from(submissions)).toHaveLength(0);
+      expect(await db.select().from(webhookDeliveries)).toHaveLength(0);
+      expect(await db.select().from(outboxEvents)).toHaveLength(0);
+      expect(await enqueueDueDeliveries()).toBe(0);
+      expect(await db.select().from(outboxEvents)).toHaveLength(0);
+    } finally {
+      await recovery;
+      await db.execute(
+        sql`drop trigger test_gate_outbox_insert on outbox_events`,
+      );
+      await db.execute(sql`drop function test_gate_outbox_insert()`);
+    }
+  });
+
+  test("processing updates preserve immutable values and enforce roles and workspace isolation", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    const saved = await receiveSubmission({
+      slug: seeded.form.slug,
+      idempotencyKey: "status",
+      input: { versionId: seeded.version.id, values: { name: "Original" } },
+    });
+    const [before] = await db.select().from(submissions);
+    await db
+      .update(memberships)
+      .set({ role: "viewer" })
+      .where(eq(memberships.userId, user.id));
+    expect(
+      (await getSubmissionDetail(workspace.slug, saved.id)).submission
+        .processingStatus,
+    ).toBe("new");
+    await expect(
+      updateSubmissionStatus(workspace.slug, saved.id, {
+        processingStatus: "processed",
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      deleteSubmission(workspace.slug, saved.id, saved.id),
+    ).rejects.toMatchObject({ status: 403 });
+    await db
+      .update(memberships)
+      .set({ role: "editor" })
+      .where(eq(memberships.userId, user.id));
+    await updateSubmissionStatus(workspace.slug, saved.id, {
+      processingStatus: "processed",
+    });
+    await expect(
+      updateSubmissionStatus(workspace.slug, saved.id, {
+        processingStatus: "new",
+        receivedValues: { name: "Changed" },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      deleteSubmission(workspace.slug, saved.id, saved.id),
+    ).rejects.toMatchObject({ status: 403 });
+    const [after] = await db.select().from(submissions);
+    expect(after).toEqual({ ...before, processingStatus: "processed" });
+    const other = await seedWorkspace();
+    await expect(
+      updateSubmissionStatus(other.workspace.slug, saved.id, {
+        processingStatus: "new",
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      deleteSubmission(other.workspace.slug, saved.id, saved.id),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(
+      (await listSubmissions({ workspaceSlug: other.workspace.slug })).data,
+    ).toHaveLength(0);
+  });
+
+  test("date, text and processing filters select the same bounded rows in the list and CSV", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    const accepted = [];
+    for (const name of ["Alpha target", "Beta target", "Alpha elsewhere"]) {
+      accepted.push(
+        await receiveSubmission({
+          slug: seeded.form.slug,
+          idempotencyKey: name,
+          input: { versionId: seeded.version.id, values: { name } },
+        }),
+      );
+    }
+    const selected = accepted[0];
+    if (!selected) throw new Error("Missing response");
+    await db
+      .update(submissions)
+      .set({
+        createdAt: new Date("2026-10-01T12:00:00Z"),
+        processingStatus: "processed",
+      })
+      .where(eq(submissions.id, selected.id));
+    const filters = {
+      from: "2026-10-01T00:00:00Z",
+      until: "2026-10-02T00:00:00Z",
+      q: "alpha target",
+      processingStatus: "processed" as const,
+    };
+    const list = await listSubmissions({
+      workspaceSlug: workspace.slug,
+      ...filters,
+      limit: 1,
+    });
+    expect(list.data.map((row) => row.id)).toEqual([selected.id]);
+    expect(list.nextCursor).toBeNull();
+    const csv = await new Response(
+      await exportSubmissionsCsv(workspace.slug, filters),
+    ).text();
+    expect(csv).toContain(selected.id);
+    for (const excluded of accepted.slice(1))
+      expect(csv).not.toContain(excluded.id);
+    expect(csv.split("\r\n")[0]).toBe(
+      '"submission_id","form","version","received_at","delivery_status","name","processing_status"',
+    );
+    await expect(
+      listSubmissions({ workspaceSlug: workspace.slug, q: "x".repeat(101) }),
+    ).rejects.toThrow();
+    await expect(
+      exportSubmissionsCsv(workspace.slug, { ...filters, until: filters.from }),
+    ).rejects.toThrow();
+  });
+  test("concurrent retries with the same key consume one last place and a single usage reservation", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    await db
+      .update(forms)
+      .set({ maxAccepted: 1 })
+      .where(eq(forms.id, seeded.form.id));
+    const request = {
+      slug: seeded.form.slug,
+      idempotencyKey: "same-last-place",
+      input: { versionId: seeded.version.id, values: { name: "One" } },
+    };
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => receiveSubmission(request)),
+    );
+    expect(new Set(results.map((result) => result.id)).size).toBe(1);
+    expect(results.filter((result) => !result.duplicate)).toHaveLength(1);
+    expect(
+      await db.select().from(forms).where(eq(forms.id, seeded.form.id)),
+    ).toMatchObject([{ acceptedCount: 1 }]);
+    expect(
+      await db
+        .select()
+        .from(usageBuckets)
+        .where(eq(usageBuckets.key, `submissions:${workspace.id}`)),
+    ).toMatchObject([{ count: 1 }]);
+  });
+
+  test("closure uses the database clock after waiting for the admission lock", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    const input = {
+      versionId: seeded.version.id,
+      values: { name: "Too late" },
+    };
+    let pending: Promise<unknown> | undefined;
+    await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`update forms set closes_at = clock_timestamp() + interval '20 milliseconds' where id = ${seeded.form.id}`,
+      );
+      pending = receiveSubmission({
+        slug: seeded.form.slug,
+        idempotencyKey: "waited-past-close",
+        input,
+      }).catch((error: unknown) => error);
+      await tx.execute(sql`select pg_sleep(0.05)`);
+    });
+    expect(await pending).toMatchObject({ status: 409 });
+    expect(await db.select().from(submissions)).toHaveLength(0);
+  });
+
+  test("intake policy changes use workspace roles and a separate optimistic revision", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    const [form] = await db
+      .select()
+      .from(forms)
+      .where(eq(forms.id, seeded.form.id));
+    if (!form) throw new Error("Missing form");
+    const input = {
+      expectedRevision: form.policyUpdatedAt.toISOString(),
+      policy: {
+        collectMetadata: false,
+        paused: true,
+        closesAt: "2027-01-01T03:00:00+03:00",
+        maxAccepted: 10,
+        closedMessage: "Closed",
+      },
+    };
+    await db
+      .update(memberships)
+      .set({ role: "viewer" })
+      .where(eq(memberships.userId, user.id));
+    await expect(
+      updateFormPolicy(workspace.slug, form.id, input),
+    ).rejects.toMatchObject({ status: 403 });
+    await db
+      .update(memberships)
+      .set({ role: "editor" })
+      .where(eq(memberships.userId, user.id));
+    const updated = await updateFormPolicy(workspace.slug, form.id, input);
+    expect(updated?.closesAt?.toISOString()).toBe("2027-01-01T00:00:00.000Z");
+    expect(updated?.updatedAt).toEqual(form.updatedAt);
+    expect(updated?.draftSchema).toEqual(form.draftSchema);
+    await expect(
+      updateFormPolicy(workspace.slug, form.id, input),
+    ).rejects.toMatchObject({ status: 409 });
+    const other = await seedWorkspace();
+    await expect(
+      updateFormPolicy(other.workspace.slug, form.id, input),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  test("delivery creation racing deletion cannot leave orphaned deliveries or outbox work", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    if (!seeded.version) throw new Error("Missing version");
+    const input = { versionId: seeded.version.id, values: { name: "Race" } };
+    await createWebhookEndpoint(workspace.slug, seeded.form.id, {
+      name: "Receiver",
+      url: "https://receiver.example.org",
+    });
+    for (let index = 0; index < 5; index += 1) {
+      const saved = await receiveSubmission({
+        slug: seeded.form.slug,
+        idempotencyKey: `creation-race-${index}`,
+        input,
+      });
+      const results = await Promise.allSettled([
+        createDeliveriesForSubmission(saved.id),
+        deleteSubmission(workspace.slug, saved.id, saved.id),
+      ]);
+      const deletion = results[1];
+      if (deletion?.status === "rejected") {
+        expect(deletion.reason).toMatchObject({ status: 409 });
+        await deleteSubmission(workspace.slug, saved.id, saved.id);
+      }
+      expect(
+        await db.select().from(submissions).where(eq(submissions.id, saved.id)),
+      ).toHaveLength(0);
+    }
+    expect(await db.select().from(webhookDeliveries)).toHaveLength(0);
+    expect(await db.select().from(outboxEvents)).toHaveLength(0);
+    expect(await db.select().from(webhookEndpoints)).toHaveLength(1);
   });
 });
 

@@ -12,6 +12,7 @@ import { useState } from "react";
 
 import { webRendererComponents } from "@/components/renderer-adapter";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { useEmbedBridge } from "./use-embed-bridge";
 import { readApiData } from "@/lib/client-api";
 
 const utmKeys = [
@@ -83,11 +84,15 @@ const getContext = (): SubmissionContext => {
 
 export const HostedForm = ({
   compact = false,
+  collectMetadata = false,
+  closedMessage,
   schema,
   slug,
   versionId,
 }: {
   compact?: boolean;
+  collectMetadata?: boolean;
+  closedMessage?: string | undefined;
   schema: FormSchemaV1;
   slug: string;
   versionId: string;
@@ -101,10 +106,15 @@ export const HostedForm = ({
       : getSubmissionIdempotencyKey(slug, versionId),
   );
   const [submitted, setSubmitted] = useState(false);
+  const embedRoot = useEmbedBridge(compact, submitted);
 
   const submit = async (values: NormalizedSubmission) => {
     const response = await fetch(`/api/forms/${slug}/submit`, {
-      body: JSON.stringify({ context: getContext(), values, versionId }),
+      body: JSON.stringify({
+        ...(collectMetadata ? { context: getContext() } : {}),
+        values,
+        versionId,
+      }),
       headers: {
         "Content-Type": "application/json",
         "Idempotency-Key": idempotencyKey,
@@ -119,7 +129,12 @@ export const HostedForm = ({
     setSubmitted(true);
   };
 
-  const content = submitted ? (
+  const content = closedMessage ? (
+    <div role="status">
+      <h1 className="text-2xl font-semibold">{schema.title}</h1>
+      <p className="mt-4">{closedMessage}</p>
+    </div>
+  ) : submitted ? (
     <div role="status" className="py-8 text-center">
       <CheckCircle2 className="mx-auto size-10 text-emerald-600" />
       <h1 className="mt-4 text-2xl font-semibold">
@@ -145,7 +160,12 @@ export const HostedForm = ({
     </>
   );
 
-  if (compact) return <div className="bg-white p-5">{content}</div>;
+  if (compact)
+    return (
+      <div ref={embedRoot} className="bg-white p-5">
+        {content}
+      </div>
+    );
   return (
     <main className="mx-auto flex min-h-screen max-w-2xl items-center px-4 py-12 sm:px-6">
       <ThemeToggle className="fixed top-4 right-4 sm:top-6 sm:right-6" />

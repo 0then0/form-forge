@@ -23,6 +23,7 @@ import {
 } from "@/db/schema";
 import { AppError, notFoundError } from "@/lib/errors";
 import { requireUuidParam } from "@/lib/route-params";
+import { formPolicyMutationSchema } from "@/lib/form-policy";
 import { slugify } from "@/lib/slug";
 
 const hashSchema = (schema: FormSchemaV1): string =>
@@ -599,5 +600,54 @@ export const permanentlyDeleteForm = async (
       workspaceId: workspace.id,
     });
     return { id: validFormId };
+  });
+};
+
+// Operational settings never rewrite an immutable published schema or a draft revision.
+export const updateFormPolicy = async (
+  workspaceSlug: string,
+  formId: string,
+  input: unknown,
+) => {
+  const workspace = await requireWorkspace(workspaceSlug, "editor");
+  const id = requireUuidParam(formId, "form ID");
+  const { expectedRevision, policy } = formPolicyMutationSchema.parse(input);
+  return db.transaction(async (tx) => {
+    const [form] = await tx
+      .select()
+      .from(forms)
+      .where(and(eq(forms.id, id), eq(forms.workspaceId, workspace.id)))
+      .for("update");
+    if (!form || form.status === "archived")
+      throw notFoundError("Form not found");
+    if (form.policyUpdatedAt.getTime() !== new Date(expectedRevision).getTime())
+      throw new AppError(
+        "CONFLICT",
+        "These settings changed in another session. Reload before saving.",
+        409,
+      );
+    const [updated] = await tx
+      .update(forms)
+      .set({
+        ...policy,
+        closesAt: policy.closesAt ? new Date(policy.closesAt) : null,
+        policyUpdatedAt: nextDraftRevision(form.policyUpdatedAt),
+      })
+      .where(eq(forms.id, id))
+      .returning();
+    await tx.insert(auditLogs).values({
+      action: "form.policy_updated",
+      actorId: workspace.user.id,
+      workspaceId: workspace.id,
+      resourceType: "form",
+      resourceId: id,
+      metadata: {
+        collectMetadata: policy.collectMetadata,
+        paused: policy.paused,
+        closesAt: policy.closesAt,
+        maxAccepted: policy.maxAccepted,
+      },
+    });
+    return updated;
   });
 };

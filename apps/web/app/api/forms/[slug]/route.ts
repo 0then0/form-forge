@@ -15,6 +15,7 @@ export const GET = async (
     return NextResponse.json({
       data: {
         form: published.form,
+        intake: published.intake,
         schema: published.version.schema,
         versionId: published.version.id,
         versionNumber: published.version.versionNumber,

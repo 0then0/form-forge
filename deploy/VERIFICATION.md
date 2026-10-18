@@ -16,7 +16,7 @@ pnpm test:production
 ```
 
 Database setup and environment requirements are described in the
-[root README](../README.md#development-commands). Deployment regression tests
+[development guide](../docs/development.md). Deployment regression tests
 use Python 3.9 or newer and its standard library, temporary Git repositories, and an isolated Docker
 build context containing fake secrets. The Docker-context test is skipped when
 Docker is unavailable. Receiver tests use temporary TLS certificates and real
@@ -90,3 +90,36 @@ The reference deployment targets one host and at-least-once delivery. Validate
 other CPU architectures, future-version upgrades and expected capacity in your environment. Graceful restart results do not prove
 power-loss durability, point-in-time recovery or high availability. Receivers must
 persistently deduplicate logical delivery IDs before performing side effects.
+
+## Product controls after 0.1.0
+
+Migration `0006_product_controls` is additive: it preserves metadata collection on
+pre-existing forms, defaults new forms to collection off, initializes lifetime
+accepted counts from existing responses and adds independent processing status,
+expiring deletion-key hashes and a PostgreSQL GIN value-search index. Published
+schemas and prior values are not rewritten. Apply migrations to a disposable local
+database for verification; production upgrades require the normal operator-led
+maintenance/backup procedure. The index build uses the normal migration transaction,
+so large installations should schedule a maintenance window.
+
+The integration suite upgrades a real pre-0006 fixture and checks privacy in both
+the receive service and HTTP route, rolling abuse counters, last-place admission,
+old-version closure, deletion rollback/worker conflicts (including cron paused
+between due selection and outbox insertion), key expiry, roles/workspace
+isolation and list/CSV consistency. Component tests exercise optional collection,
+embed origin/source/channel validation and observer cleanup, while Playwright
+exercises intake changes in an already-open page, immutable processing updates,
+confirmed deletion, fresh cached lists after client navigation and multiple cross-origin iframe heights through validation,
+conditional fields and success. MCP/OpenAPI tests cover session/origin protection,
+bounded shared arguments and actual request schemas. No snapshots are regenerated.
+
+The real scheduler outage fixture explicitly waits for the failed immediate
+ingestion attempt before checking atomicity or taking the cold backup boundary;
+its proxy-fingerprint scenario explicitly opts into metadata collection.
+The development browser fixture waits for the immediate ingestion outage attempt
+before advancing the test-only scheduling clock. This is not evidence of real
+Inngest transport. Continue to run the real scheduler/HTTPS acceptance drill for
+a deployment; unit, integration, component and Playwright checks do not validate
+Netlify's installed adapter or an external receiver. The immediate path uses
+Next.js `after` plus Inngest steps, bounded HTTP attempts, and the same claims and
+stable event IDs as the five-minute recovery path.

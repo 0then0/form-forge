@@ -3,6 +3,7 @@ import { Alert, Badge, Card, CardContent, CardHeader } from "@form-forge/ui";
 import Link from "next/link";
 
 import { canEdit, requireWorkspace } from "@/auth/permissions";
+import { SubmissionActions } from "@/components/submissions/submission-actions";
 import { RetryButton } from "@/components/deliveries/retry-button";
 import { LocalDateTime } from "@/components/local-date-time";
 import { getSubmissionDetail } from "@/services/submissions";
@@ -55,6 +56,13 @@ export default async function SubmissionDetailPage({
         </Badge>
       </div>
 
+      <SubmissionActions
+        workspaceSlug={workspaceSlug}
+        submissionId={submissionId}
+        processingStatus={detail.submission.processingStatus}
+        canEdit={canEdit(workspace.role)}
+        canDelete={workspace.role === "owner"}
+      />
       {detail.historyTruncated ? (
         <Alert className="mt-4" tone="info">
           This submission has more than 200 history records. The newest records

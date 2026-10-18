@@ -7,6 +7,7 @@ import {
 } from "@/services/deliveries";
 import {
   dispatchPendingOutbox,
+  dispatchSubmissionOutbox,
   enqueueDueDeliveries,
   enqueueUnprocessedSubmissions,
 } from "@/services/outbox";
@@ -25,6 +26,9 @@ export const processSubmission = inngest.createFunction(
         event.data.submissionId,
         event.data.endpointIds,
       ),
+    );
+    await step.run("dispatch-new-deliveries", () =>
+      dispatchSubmissionOutbox(event.data.submissionId),
     );
     return { deliveryCount };
   },

@@ -377,13 +377,19 @@ const EditorSidebar = ({
             <div className="border-b border-slate-100 px-5 py-4">
               <h2 className="font-semibold">Embed</h2>
               <p className="mt-1 text-sm text-slate-600">
-                Stable iframe using the hosted form.
+                Iframe with automatic height. The script emits ready and
+                submitted events without response values.
               </p>
             </div>
             <CardContent>
               <code className="block overflow-x-auto rounded-lg bg-slate-950 p-3 text-xs break-all whitespace-pre-wrap text-slate-100">
-                {`<iframe src="${publicBaseUrl}/f/${publicSlug}?embed=1" title="${escapeHtmlAttribute(deferredSchema.title)}" loading="lazy" width="100%" height="640"></iframe>`}
+                {`<iframe data-form-forge src="${publicBaseUrl}/f/${publicSlug}?embed=1" title="${escapeHtmlAttribute(deferredSchema.title)}" loading="lazy" width="100%" height="640"></iframe>\n<script src="${publicBaseUrl}/embed.js" defer></script>`}
               </code>
+              <p className="mt-3 text-sm text-slate-600">
+                For a fixed-height iframe, omit data-form-forge and the script.
+                Forms remain public; embedding and message-origin checks do not
+                restrict direct API requests.
+              </p>
             </CardContent>
           </Card>
         ) : null}

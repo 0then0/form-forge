@@ -1,3 +1,4 @@
+import { defaultFormSchema, type FormSchemaV1 } from "@form-forge/form-schema";
 import { expect, test } from "@playwright/test";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
@@ -201,10 +202,24 @@ test("creates, publishes, submits, fails, retries, and succeeds", async ({
   });
   await expect(page.getByRole("status")).toBeVisible();
 
+  // The new after() path must finish its failed ingestion attempt before the
+  // fixture advances persisted scheduling and takes over as the test scheduler.
+  await expect
+    .poll(
+      async () =>
+        (
+          await pool.query<{ status: string }>(
+            "select status from outbox_events where aggregate_id = $1",
+            [(await submissionResponse.json()).data.submissionId],
+          )
+        ).rows[0]?.status,
+      { timeout: 20_000 },
+    )
+    .toBe("failed");
   const processSubmission = await page.request.post(
     "/api/internal/e2e/pipeline",
     {
-      data: { action: "process-next", outcome: "failure" },
+      data: { action: "process-next", advanceDue: true, outcome: "failure" },
       headers: { "x-form-forge-e2e-token": pipelineToken },
     },
   );
@@ -280,4 +295,379 @@ test("creates, publishes, submits, fails, retries, and succeeds", async ({
   await expect(repeated.json()).resolves.toMatchObject({
     data: { duplicate: true },
   });
+});
+
+const signIn = async (page: import("@playwright/test").Page) =>
+  page.context().addCookies([
+    {
+      domain: "localhost",
+      httpOnly: true,
+      name: "next-auth.session-token",
+      path: "/",
+      sameSite: "Lax",
+      secure: false,
+      value: sessionToken,
+    },
+  ]);
+const createPublishedFixture = async (
+  page: import("@playwright/test").Page,
+  fields?: FormSchemaV1["fields"],
+) => {
+  await signIn(page);
+  const created = await page.request.post(
+    `/api/admin/workspaces/${workspaceSlug}/forms`,
+    { data: { name: `Product ${crypto.randomUUID()}` } },
+  );
+  expect(created.status()).toBe(201);
+  const form = (await created.json()).data as {
+    id: string;
+    slug: string;
+    updatedAt: string;
+    name: string;
+  };
+  const schema: FormSchemaV1 = {
+    ...defaultFormSchema(),
+    title: form.name,
+    fields: fields ?? [
+      {
+        id: crypto.randomUUID(),
+        key: "name",
+        label: "Name",
+        type: "shortText",
+        required: true,
+        width: "full",
+      },
+    ],
+  };
+  const published = await page.request.post(
+    `/api/admin/workspaces/${workspaceSlug}/forms/${form.id}/publish`,
+    { data: { expectedRevision: form.updatedAt, schema } },
+  );
+  expect(published.status()).toBe(201);
+  return { form, versionId: (await published.json()).data.id as string };
+};
+
+test("manages intake, private metadata, processing, columns, filtered CSV and confirmed deletion", async ({
+  page,
+}) => {
+  test.slow();
+  const { form, versionId } = await createPublishedFixture(page);
+  const oldTab = await page.context().newPage();
+  await oldTab.goto(`/f/${form.slug}`);
+  await page.goto(`/app/${workspaceSlug}/forms/${form.id}`);
+  await expect(
+    page.getByLabel("Collect optional source metadata"),
+  ).not.toBeChecked();
+  await page.getByLabel("Pause responses").check();
+  await page.getByLabel("Closed intake message").fill("Intake paused by owner");
+  await page.getByRole("button", { name: "Save intake settings" }).click();
+  await expect(page.getByRole("status")).toHaveText("Intake settings saved");
+  await oldTab
+    .getByRole("textbox", { name: "Name", exact: true })
+    .fill("Ada private");
+  await oldTab.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(oldTab.getByText("Intake paused by owner")).toBeVisible();
+  await page.getByLabel("Pause responses").uncheck();
+  await page.getByLabel("Maximum accepted responses").fill("1");
+  await page.getByRole("button", { name: "Save intake settings" }).click();
+  await expect(page.getByRole("status")).toHaveText("Intake settings saved");
+  const accepted = oldTab.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().includes(`/api/forms/${form.slug}/submit`),
+  );
+  await oldTab.getByRole("button", { name: "Submit", exact: true }).click();
+  const response = await accepted;
+  expect(response.status()).toBe(201);
+  const submissionId = (await response.json()).data.submissionId as string;
+  const submittedRequest = response.request();
+  expect(submittedRequest.postDataJSON()).not.toHaveProperty("context");
+  expect(
+    await oldTab.evaluate(() => localStorage.getItem("form-forge-visitor-id")),
+  ).toBeNull();
+  const original = await pool.query("select * from submissions where id = $1", [
+    submissionId,
+  ]);
+  expect(original.rows[0]).toMatchObject({
+    utm: {},
+    fingerprint_hash: null,
+    user_agent: null,
+    referrer: null,
+  });
+  const intake = await page.request.get(`/api/forms/${form.slug}`);
+  expect((await intake.json()).data.intake.closed).toBe(true);
+  const repeated = await page.request.post(`/api/forms/${form.slug}/submit`, {
+    headers: {
+      "Idempotency-Key":
+        submittedRequest.headers()["idempotency-key"] ?? "missing",
+    },
+    data: { versionId, values: { name: "Ada private" } },
+  });
+  expect(repeated.status()).toBe(200);
+  // Populate the shared query cache, then keep it through client navigation.
+  // Full page.goto navigation would conceal stale data after either mutation.
+  await page.goto(`/app/${workspaceSlug}/submissions`);
+  await page.getByRole("link", { name: form.name, exact: true }).click();
+  await page.getByRole("button", { name: "Mark as processed" }).click();
+  await expect(page.getByText("Processed", { exact: true })).toBeVisible();
+  expect(
+    (
+      await pool.query("select * from submissions where id = $1", [
+        submissionId,
+      ])
+    ).rows[0],
+  ).toEqual({ ...original.rows[0], processing_status: "processed" });
+  await page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("link", { name: "Submissions", exact: true })
+    .click();
+  const updatedRow = page.getByRole("row").filter({ hasText: form.name });
+  await expect(
+    updatedRow.getByRole("cell", { name: "Processed", exact: true }),
+  ).toBeVisible();
+  await page.getByLabel("Filter by form").selectOption(form.id);
+  await page
+    .getByLabel("Filter by processing status")
+    .selectOption("processed");
+  await page.getByLabel("Search answer words").fill("Ada");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+  await expect(
+    page.getByRole("link", { name: form.name, exact: true }),
+  ).toBeVisible();
+  await page.getByText("Displayed columns", { exact: true }).click();
+  await page.getByRole("checkbox", { name: "Values", exact: true }).uncheck();
+  await page
+    .getByRole("checkbox", { name: "Answer: name", exact: true })
+    .check();
+  await expect(
+    page.getByRole("columnheader", { name: "Values", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("columnheader", { name: "name", exact: true }),
+  ).toBeVisible();
+  const href = await page
+    .getByRole("link", { name: "Export CSV" })
+    .getAttribute("href");
+  if (!href) throw new Error("Missing export link");
+  const csv = await page.request.get(href);
+  expect(csv.status()).toBe(200);
+  expect(await csv.text()).toContain(submissionId);
+  await page.getByRole("link", { name: form.name, exact: true }).click();
+  await expect
+    .poll(
+      async () =>
+        (
+          await pool.query<{ status: string }>(
+            "select status from outbox_events where aggregate_id = $1",
+            [submissionId],
+          )
+        ).rows[0]?.status,
+      { timeout: 20_000 },
+    )
+    .toBe("failed");
+  await page
+    .getByRole("button", { name: "Delete response", exact: true })
+    .click();
+  const deleteButton = page.getByRole("button", {
+    name: "Permanently delete response",
+    exact: true,
+  });
+  await expect(deleteButton).toBeDisabled();
+  await expect(
+    page.getByText(/Backup copies and data already received/),
+  ).toBeVisible();
+  await page
+    .getByLabel(`Type submission ID ${submissionId} to confirm`)
+    .fill(submissionId);
+  await deleteButton.click();
+  await expect(page).toHaveURL(`/app/${workspaceSlug}/submissions`);
+  await expect(
+    page.getByRole("link", { name: form.name, exact: true }),
+  ).toHaveCount(0);
+  await page.getByLabel("Filter by form").selectOption(form.id);
+  await page
+    .getByLabel("Filter by processing status")
+    .selectOption("processed");
+  await page.getByLabel("Search answer words").fill("Ada");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+  await expect(
+    page.getByRole("heading", { name: "No submissions", exact: true }),
+  ).toBeVisible();
+  expect(
+    (
+      await pool.query("select accepted_count from forms where id = $1", [
+        form.id,
+      ])
+    ).rows[0]?.accepted_count,
+  ).toBe(1);
+  const deletedReplay = await page.request.post(
+    `/api/forms/${form.slug}/submit`,
+    {
+      headers: {
+        "Idempotency-Key":
+          submittedRequest.headers()["idempotency-key"] ?? "missing",
+      },
+      data: { versionId, values: { name: "Ada private" } },
+    },
+  );
+  expect(deletedReplay.status()).toBe(409);
+  await oldTab.close();
+});
+
+test("auto-resizes multiple cross-origin embeds and ignores forged messages while preserving plain iframes", async ({
+  page,
+}) => {
+  test.slow();
+  const { form } = await createPublishedFixture(page, [
+    {
+      id: crypto.randomUUID(),
+      key: "name",
+      label: "Name",
+      type: "shortText",
+      required: true,
+      width: "full",
+      validation: { minLength: 3 },
+    },
+    {
+      id: crypto.randomUUID(),
+      key: "more",
+      label: "More details",
+      type: "checkbox",
+      required: false,
+      width: "full",
+    },
+    {
+      id: crypto.randomUUID(),
+      key: "details",
+      label: "Details",
+      type: "longText",
+      required: false,
+      width: "full",
+      visibility: { fieldKey: "more", operator: "equals", value: true },
+    },
+  ]);
+  // Use an actual loopback document. A fulfilled synthetic document has an
+  // unknown address space in Chromium and blocks local-network child frames.
+  await page.goto("http://127.0.0.1:3000/");
+  await page.evaluate((slug) => {
+    const events: Array<{ type: string; keys: string[]; frame: string }> = [];
+    (window as unknown as { embedEvents: typeof events }).embedEvents = events;
+    for (const type of ["ready", "submitted"])
+      window.addEventListener(`formforge:${type}`, (event) => {
+        events.push({
+          type,
+          keys: Object.keys((event as CustomEvent).detail),
+          frame: (event.target as HTMLIFrameElement).id,
+        });
+      });
+    for (const id of ["first", "second", "plain"]) {
+      const frame = document.createElement("iframe");
+      frame.id = id;
+      if (id !== "plain") frame.setAttribute("data-form-forge", "");
+      frame.src = `http://localhost:3000/f/${slug}?embed=1`;
+      frame.width = "600";
+      frame.height = "640";
+      document.body.append(frame);
+    }
+  }, form.slug);
+  await page.addScriptTag({ url: "/embed.js" });
+  const first = page.frameLocator("#first");
+  await expect(
+    first.getByRole("textbox", { name: "Name", exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(() => page.locator("#first").evaluate((node) => node.style.height))
+    .not.toBe("");
+  await expect
+    .poll(() => page.locator("#second").evaluate((node) => node.style.height))
+    .not.toBe("");
+  const height = () =>
+    page
+      .locator("#first")
+      .evaluate((node) => Number.parseInt(node.style.height, 10));
+  const initialHeight = await height();
+  const secondHeight = await page
+    .locator("#second")
+    .evaluate((node) => node.style.height);
+  await page.evaluate(() => {
+    const element = document.querySelector<HTMLIFrameElement>("#first");
+    const second = document.querySelector<HTMLIFrameElement>("#second");
+    if (!element || !second) throw new Error("Missing frames");
+    const channel = new URL(element.src).searchParams.get("ff_embed_id");
+    for (const [origin, source, patch] of [
+      ["https://attacker.example", element.contentWindow, {}],
+      ["http://localhost:3000", window, {}],
+      ["http://localhost:3000", second.contentWindow, {}],
+      ["http://localhost:3000", element.contentWindow, { channel: "wrong" }],
+      ["http://localhost:3000", element.contentWindow, { height: "9999" }],
+    ] as const)
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          origin,
+          source,
+          data: {
+            protocol: "form-forge/embed",
+            version: 1,
+            channel,
+            type: "resize",
+            height: 9999,
+            ...patch,
+          },
+        }),
+      );
+  });
+  expect(await height()).toBe(initialHeight);
+  await first.getByRole("textbox", { name: "Name", exact: true }).fill("a");
+  await first.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(
+    first
+      .locator('p[role="alert"]')
+      .filter({ hasText: "Must contain at least 3 characters" }),
+  ).toBeVisible();
+  await expect.poll(height).toBeGreaterThan(initialHeight);
+  const errorHeight = await height();
+  await first.getByLabel("More details").check();
+  await expect(first.getByLabel("Details", { exact: true })).toBeVisible();
+  await expect.poll(height).toBeGreaterThan(errorHeight);
+  const expandedHeight = await height();
+  await first
+    .getByRole("textbox", { name: "Name", exact: true })
+    .fill("Ada embed");
+  await first.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(first.getByRole("status")).toBeVisible();
+  await expect.poll(height).toBeLessThan(expandedHeight);
+  expect(
+    await page.locator("#second").evaluate((node) => node.style.height),
+  ).toBe(secondHeight);
+  await expect(
+    page
+      .frameLocator("#plain")
+      .getByRole("textbox", { name: "Name", exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.locator("#plain").evaluate((node) => node.style.height),
+  ).toBe("");
+  expect(await page.locator("#plain").getAttribute("height")).toBe("640");
+  const events = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          embedEvents: Array<{ type: string; keys: string[]; frame: string }>;
+        }
+      ).embedEvents,
+  );
+  expect(
+    events.some((event) => event.type === "ready" && event.frame === "first"),
+  ).toBe(true);
+  expect(
+    events.some((event) => event.type === "ready" && event.frame === "second"),
+  ).toBe(true);
+  expect(events.filter((event) => event.type === "submitted")).toEqual([
+    { type: "submitted", keys: ["iframe"], frame: "first" },
+  ]);
+  await page.evaluate(() =>
+    (
+      window as unknown as { FormForgeEmbed: { destroyAll: () => void } }
+    ).FormForgeEmbed.destroyAll(),
+  );
 });

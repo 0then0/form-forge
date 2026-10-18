@@ -1,11 +1,23 @@
 import "server-only";
 
-import { and, desc, eq, inArray, lt, or, sql, type SQL } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  gte,
+  lt,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 
 import { requireWorkspace } from "@/auth/permissions";
 import { db } from "@/db/client";
 import {
   auditLogs,
+  deletedSubmissionKeys,
+  outboxEvents,
   deliveryAttempts,
   forms,
   formVersions,
@@ -13,9 +25,15 @@ import {
   submissions,
   webhookDeliveries,
   webhookEndpoints,
-  type DeliveryStatus,
 } from "@/db/schema";
 import { AppError, notFoundError } from "@/lib/errors";
+import { submissionStatusMutationSchema } from "@/lib/submission-mutations";
+import {
+  submissionFilterSchema,
+  type SubmissionFilters,
+} from "@/lib/submission-filters";
+import { z } from "zod";
+import { hashDeletedSubmissionKey } from "@/lib/deleted-submission-key";
 import { requireUuidParam } from "@/lib/route-params";
 
 type SubmissionCursor = { createdAt: Date; id: string };
@@ -50,27 +68,43 @@ const encodeCursor = (cursor: SubmissionCursor): string =>
     }),
   ).toString("base64url");
 
+// Shared by the list and export. Only immutable values enter full-text search;
+// jsonb_to_tsvector excludes keys and uses PostgreSQL's built-in simple dictionary.
+const submissionConditions = (
+  workspaceId: string,
+  input: SubmissionFilters,
+): SQL[] => {
+  const filters = submissionFilterSchema.parse(input);
+  const conditions: SQL[] = [eq(forms.workspaceId, workspaceId)];
+  if (filters.deliveryStatus)
+    conditions.push(eq(submissions.deliveryStatus, filters.deliveryStatus));
+  if (filters.processingStatus)
+    conditions.push(eq(submissions.processingStatus, filters.processingStatus));
+  if (filters.formId) conditions.push(eq(submissions.formId, filters.formId));
+  if (filters.from)
+    conditions.push(gte(submissions.createdAt, new Date(filters.from)));
+  if (filters.until)
+    conditions.push(lt(submissions.createdAt, new Date(filters.until)));
+  if (filters.q)
+    conditions.push(
+      sql`jsonb_to_tsvector('simple'::regconfig, ${submissions.normalizedValues}, '["string", "numeric", "boolean"]'::jsonb) @@ websearch_to_tsquery('simple', ${filters.q})`,
+    );
+  return conditions;
+};
+
 export const listSubmissions = async ({
   cursor,
-  deliveryStatus,
-  formId,
   limit = 25,
   workspaceSlug,
-}: {
+  ...filters
+}: SubmissionFilters & {
   cursor?: string | undefined;
-  deliveryStatus?: DeliveryStatus | undefined;
-  formId?: string | undefined;
   limit?: number | undefined;
   workspaceSlug: string;
 }) => {
   const workspace = await requireWorkspace(workspaceSlug);
-  const conditions: SQL[] = [eq(forms.workspaceId, workspace.id)];
-  if (deliveryStatus)
-    conditions.push(eq(submissions.deliveryStatus, deliveryStatus));
-  if (formId)
-    conditions.push(
-      eq(submissions.formId, requireUuidParam(formId, "form ID")),
-    );
+  limit = z.number().int().min(1).max(100).parse(limit);
+  const conditions = submissionConditions(workspace.id, filters);
   if (cursor) {
     const decoded = decodeCursor(cursor);
     const paginationCondition = or(
@@ -87,6 +121,7 @@ export const listSubmissions = async ({
     .select({
       createdAt: submissions.createdAt,
       deliveryStatus: submissions.deliveryStatus,
+      processingStatus: submissions.processingStatus,
       formId: forms.id,
       formName: forms.name,
       id: submissions.id,
@@ -122,6 +157,7 @@ export const getSubmissionDetail = async (
     .select({
       createdAt: submissions.createdAt,
       deliveryStatus: submissions.deliveryStatus,
+      processingStatus: submissions.processingStatus,
       fingerprintHash: submissions.fingerprintHash,
       formId: forms.id,
       formName: forms.name,
@@ -222,25 +258,12 @@ const CSV_BATCH_SIZE = 100;
 const MAX_EXPORT_ROWS = 10_000;
 const MAX_EXPORT_COLUMNS = 500;
 
-type SubmissionExportFilters = {
-  deliveryStatus?: DeliveryStatus | undefined;
-  formId?: string | undefined;
-};
-
 export const exportSubmissionsCsv = async (
   workspaceSlug: string,
-  filters: SubmissionExportFilters = {},
+  filters: SubmissionFilters = {},
 ) => {
   const workspace = await requireWorkspace(workspaceSlug);
-  const conditions: SQL[] = [eq(forms.workspaceId, workspace.id)];
-  if (filters.deliveryStatus) {
-    conditions.push(eq(submissions.deliveryStatus, filters.deliveryStatus));
-  }
-  if (filters.formId) {
-    conditions.push(
-      eq(submissions.formId, requireUuidParam(filters.formId, "form ID")),
-    );
-  }
+  const conditions = submissionConditions(workspace.id, filters);
   const where = and(...conditions);
   // Freeze membership and display metadata before starting the stream. Values
   // are immutable; later submissions/status changes must not alter this export.
@@ -249,6 +272,7 @@ export const exportSubmissionsCsv = async (
       id: submissions.id,
       createdAt: submissions.createdAt,
       deliveryStatus: submissions.deliveryStatus,
+      processingStatus: submissions.processingStatus,
       formName: forms.name,
       versionNumber: formVersions.versionNumber,
     })
@@ -293,6 +317,7 @@ export const exportSubmissionsCsv = async (
     "received_at",
     "delivery_status",
     ...valueKeys,
+    "processing_status",
   ];
   const encoder = new TextEncoder();
   let offset = 0;
@@ -351,6 +376,7 @@ export const exportSubmissionsCsv = async (
             row.createdAt.toISOString(),
             row.deliveryStatus,
             ...valueKeys.map((key) => values[key]),
+            row.processingStatus,
           ]
             .map(escapeCsv)
             .join(",");
@@ -361,5 +387,156 @@ export const exportSubmissionsCsv = async (
         controller.error(error);
       }
     },
+  });
+};
+
+export const deleteSubmission = async (
+  workspaceSlug: string,
+  submissionId: string,
+  confirmation: string,
+) => {
+  const workspace = await requireWorkspace(workspaceSlug, "owner");
+  const id = requireUuidParam(submissionId, "submission ID");
+  if (confirmation !== id)
+    throw new AppError(
+      "VALIDATION_ERROR",
+      "Enter the submission ID to confirm deletion",
+      422,
+    );
+  try {
+    return await db.transaction(async (tx) => {
+      const [record] = await tx
+        .select({ formId: submissions.formId })
+        .from(submissions)
+        .innerJoin(forms, eq(forms.id, submissions.formId))
+        .where(and(eq(submissions.id, id), eq(forms.workspaceId, workspace.id)))
+        .limit(1);
+      if (!record) throw notFoundError("Submission not found");
+      // Admission takes the form lock first. Other workers use different orders;
+      // NOWAIT everywhere avoids holding one side while waiting for another.
+      await tx
+        .select({ id: forms.id })
+        .from(forms)
+        .where(eq(forms.id, record.formId))
+        .for("update", { noWait: true });
+      const [submission] = await tx
+        .select()
+        .from(submissions)
+        .where(eq(submissions.id, id))
+        .for("update", { noWait: true });
+      if (!submission) throw notFoundError("Submission not found");
+      const endpointIds = tx
+        .select({ id: webhookDeliveries.endpointId })
+        .from(webhookDeliveries)
+        .where(eq(webhookDeliveries.submissionId, id));
+      await tx
+        .select({ id: webhookEndpoints.id })
+        .from(webhookEndpoints)
+        .where(inArray(webhookEndpoints.id, endpointIds))
+        .for("update", { noWait: true });
+      const deliveries = await tx
+        .select({ id: webhookDeliveries.id, status: webhookDeliveries.status })
+        .from(webhookDeliveries)
+        .where(eq(webhookDeliveries.submissionId, id))
+        .for("update", { noWait: true });
+      const aggregates = [id, ...deliveries.map((delivery) => delivery.id)];
+      const outbox = await tx
+        .select({ status: outboxEvents.status })
+        .from(outboxEvents)
+        .where(inArray(outboxEvents.aggregateId, aggregates))
+        .for("update", { noWait: true });
+      if (
+        deliveries.some((delivery) => delivery.status === "processing") ||
+        outbox.some((event) => event.status === "processing")
+      )
+        throw new AppError(
+          "CONFLICT",
+          "Background processing is using this response. Wait for it to finish and retry deletion.",
+          409,
+        );
+      await tx
+        .insert(deletedSubmissionKeys)
+        .values({
+          formId: record.formId,
+          keyHash: hashDeletedSubmissionKey(
+            record.formId,
+            submission.idempotencyKey,
+          ),
+          expiresAt: new Date(Date.now() + 30 * 86_400_000),
+        })
+        .onConflictDoUpdate({
+          target: [deletedSubmissionKeys.formId, deletedSubmissionKeys.keyHash],
+          set: { expiresAt: new Date(Date.now() + 30 * 86_400_000) },
+        });
+      await tx
+        .delete(outboxEvents)
+        .where(inArray(outboxEvents.aggregateId, aggregates));
+      // FK cascades remove attempts, deliveries and events in this transaction.
+      await tx.delete(submissions).where(eq(submissions.id, id));
+      await tx.insert(auditLogs).values({
+        action: "submission.deleted",
+        actorId: workspace.user.id,
+        resourceType: "submission",
+        resourceId: id,
+        workspaceId: workspace.id,
+        metadata: { formId: record.formId },
+      });
+      return { id };
+    });
+  } catch (error) {
+    const cause = error instanceof Error && error.cause ? error.cause : error;
+    if (
+      typeof cause === "object" &&
+      cause !== null &&
+      "code" in cause &&
+      cause.code === "55P03"
+    )
+      throw new AppError(
+        "CONFLICT",
+        "Background processing is using this response. Wait for it to finish and retry deletion.",
+        409,
+      );
+    throw error;
+  }
+};
+
+export const updateSubmissionStatus = async (
+  workspaceSlug: string,
+  submissionId: string,
+  input: unknown,
+) => {
+  const workspace = await requireWorkspace(workspaceSlug, "editor");
+  const id = requireUuidParam(submissionId, "submission ID");
+  const { processingStatus } = submissionStatusMutationSchema.parse(input);
+  return db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(submissions)
+      .set({ processingStatus })
+      .where(
+        and(
+          eq(submissions.id, id),
+          inArray(
+            submissions.formId,
+            tx
+              .select({ id: forms.id })
+              .from(forms)
+              .where(eq(forms.workspaceId, workspace.id)),
+          ),
+        ),
+      )
+      .returning({
+        id: submissions.id,
+        processingStatus: submissions.processingStatus,
+      });
+    if (!updated) throw notFoundError("Submission not found");
+    await tx.insert(auditLogs).values({
+      action: "submission.status_updated",
+      actorId: workspace.user.id,
+      workspaceId: workspace.id,
+      resourceType: "submission",
+      resourceId: id,
+      metadata: { processingStatus },
+    });
+    return updated;
   });
 };

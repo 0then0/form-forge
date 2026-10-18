@@ -141,7 +141,9 @@ export const dispatchPendingOutbox = async (
   limit = 25,
   send: (event: OutboxEvent) => Promise<unknown> = (event) =>
     inngest.send(event),
+  aggregateIds?: string[],
 ) => {
+  if (aggregateIds?.length === 0) return 0;
   const result = await db.execute<{
     aggregateId: string;
     attempts: number;
@@ -154,6 +156,14 @@ export const dispatchPendingOutbox = async (
       from outbox_events
       where status in ('pending', 'failed', 'processing')
         and available_at <= now()
+        ${
+          aggregateIds
+            ? sql`and aggregate_id in (${sql.join(
+                aggregateIds.map((id) => sql`${id}::uuid`),
+                sql`, `,
+              )})`
+            : sql``
+        }
         and (
           type in ('submission.received', 'delivery.requested', 'delivery.retry_requested')
           or attempts < ${MAX_OUTBOX_ATTEMPTS}
@@ -177,73 +187,99 @@ export const dispatchPendingOutbox = async (
   const candidates = result.rows;
 
   let sent = 0;
-  for (const candidate of candidates) {
-    try {
-      await send(eventForOutbox(candidate));
-      const [completed] = await db
-        .update(outboxEvents)
-        .set({ lastError: null, sentAt: new Date(), status: "sent" })
-        .where(
-          and(
-            eq(outboxEvents.id, candidate.id),
-            eq(outboxEvents.status, "processing"),
-            eq(outboxEvents.attempts, candidate.attempts),
-          ),
-        )
-        .returning({ id: outboxEvents.id });
-      if (completed) sent += 1;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      const retryLimitReached =
-        !isRetryableOutboxType(candidate.type) &&
-        candidate.attempts >= MAX_OUTBOX_ATTEMPTS;
-      const availableAt = new Date(
-        Date.now() +
-          (retryLimitReached
-            ? OUTBOX_RETRY_MAX_MS
-            : outboxRetryDelay(candidate.attempts)),
-      );
-      const reportDispatchFailure =
-        isRetryableOutboxType(candidate.type) &&
-        candidate.attempts === MAX_OUTBOX_ATTEMPTS;
-      const submissionId = reportDispatchFailure
-        ? await getSubmissionIdForOutboxEvent(candidate)
-        : null;
-
-      await db.transaction(async (tx) => {
-        const [failed] = await tx
-          .update(outboxEvents)
-          .set({
-            availableAt,
-            lastError:
-              `${message}${retryLimitReached ? " (retry limit reached)" : ""}`.slice(
-                0,
-                1_000,
+  for (let offset = 0; offset < candidates.length; offset += 5) {
+    const outcomes = await Promise.allSettled(
+      candidates.slice(offset, offset + 5).map(async (candidate) => {
+        try {
+          await send(eventForOutbox(candidate));
+          const [completed] = await db
+            .update(outboxEvents)
+            .set({ lastError: null, sentAt: new Date(), status: "sent" })
+            .where(
+              and(
+                eq(outboxEvents.id, candidate.id),
+                eq(outboxEvents.status, "processing"),
+                eq(outboxEvents.attempts, candidate.attempts),
               ),
-            status: "failed",
-          })
-          .where(
-            and(
-              eq(outboxEvents.id, candidate.id),
-              eq(outboxEvents.status, "processing"),
-              eq(outboxEvents.attempts, candidate.attempts),
-            ),
-          )
-          .returning({ id: outboxEvents.id });
-        if (failed && submissionId) {
-          await tx.insert(submissionEvents).values({
-            data: {
-              attempts: candidate.attempts,
-              eventType: candidate.type,
-            },
-            submissionId,
-            type: "delivery.dispatch_failed",
+            )
+            .returning({ id: outboxEvents.id });
+          if (completed) sent += 1;
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "Unknown error";
+          const retryLimitReached =
+            !isRetryableOutboxType(candidate.type) &&
+            candidate.attempts >= MAX_OUTBOX_ATTEMPTS;
+          const availableAt = new Date(
+            Date.now() +
+              (retryLimitReached
+                ? OUTBOX_RETRY_MAX_MS
+                : outboxRetryDelay(candidate.attempts)),
+          );
+          const reportDispatchFailure =
+            isRetryableOutboxType(candidate.type) &&
+            candidate.attempts === MAX_OUTBOX_ATTEMPTS;
+          const submissionId = reportDispatchFailure
+            ? await getSubmissionIdForOutboxEvent(candidate)
+            : null;
+
+          await db.transaction(async (tx) => {
+            const [failed] = await tx
+              .update(outboxEvents)
+              .set({
+                availableAt,
+                lastError:
+                  `${message}${retryLimitReached ? " (retry limit reached)" : ""}`.slice(
+                    0,
+                    1_000,
+                  ),
+                status: "failed",
+              })
+              .where(
+                and(
+                  eq(outboxEvents.id, candidate.id),
+                  eq(outboxEvents.status, "processing"),
+                  eq(outboxEvents.attempts, candidate.attempts),
+                ),
+              )
+              .returning({ id: outboxEvents.id });
+            if (failed && submissionId) {
+              await tx.insert(submissionEvents).values({
+                data: {
+                  attempts: candidate.attempts,
+                  eventType: candidate.type,
+                },
+                submissionId,
+                type: "delivery.dispatch_failed",
+              });
+            }
           });
         }
-      });
-    }
+      }),
+    );
+    const failed = outcomes.find((outcome) => outcome.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
   }
   return sent;
+};
+
+// Scoped to the newly committed submission, never the public request's backlog.
+// Lifecycle callers await this; durable cron recovery remains authoritative.
+export const dispatchSubmissionOutbox = async (submissionId: string) => {
+  try {
+    const deliveries = await db
+      .select({ id: webhookDeliveries.id })
+      .from(webhookDeliveries)
+      .where(eq(webhookDeliveries.submissionId, submissionId))
+      .limit(5);
+    return await dispatchPendingOutbox(6, undefined, [
+      submissionId,
+      ...deliveries.map(({ id }) => id),
+    ]);
+  } catch {
+    // A committed response must remain successful even during a DB/scheduler outage.
+    return 0;
+  }
 };
 
 export const enqueueDueDeliveries = async () =>
@@ -365,7 +401,10 @@ export const enqueueDueDeliveries = async () =>
         ),
       )
       .orderBy(asc(webhookDeliveries.nextAttemptAt), asc(webhookDeliveries.id))
-      .limit(500);
+      .limit(500)
+      // Keep deletion from removing a selected delivery before its outbox row
+      // is inserted. Deletion uses NOWAIT and retries after this commit.
+      .for("update", { skipLocked: true });
 
     if (due.length > 0) {
       await tx

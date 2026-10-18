@@ -50,7 +50,12 @@ describe("HostedForm", () => {
     vi.stubGlobal("fetch", fetch);
     const user = userEvent.setup();
     render(
-      <HostedForm schema={schema} slug="contact" versionId="version-id" />,
+      <HostedForm
+        collectMetadata
+        schema={schema}
+        slug="contact"
+        versionId="version-id"
+      />,
     );
 
     await user.type(screen.getByRole("textbox", { name: "Name" }), "Ada");
@@ -66,6 +71,38 @@ describe("HostedForm", () => {
     expect(JSON.parse(String(request.body)).context).not.toHaveProperty(
       "visitorId",
     );
+  });
+
+  it("does not read or create persistent visitor metadata when disabled", async () => {
+    const visitorRead = vi.spyOn(Storage.prototype, "getItem");
+    const visitorWrite = vi.spyOn(Storage.prototype, "setItem");
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: { submissionId: "private" } }), {
+        status: 201,
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup();
+    render(
+      <HostedForm
+        compact
+        schema={schema}
+        slug="private"
+        versionId="version-id"
+      />,
+    );
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Ada");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await screen.findByRole("status");
+    expect(JSON.parse(fetch.mock.calls[0]?.[1].body)).not.toHaveProperty(
+      "context",
+    );
+    expect(
+      visitorRead.mock.calls.some(([key]) => key === "form-forge-visitor-id"),
+    ).toBe(false);
+    expect(
+      visitorWrite.mock.calls.some(([key]) => key === "form-forge-visitor-id"),
+    ).toBe(false);
   });
 
   it("shows a stable message for a non-JSON gateway error", async () => {

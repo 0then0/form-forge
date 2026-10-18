@@ -110,7 +110,7 @@ Create a [GitHub OAuth application](https://docs.github.com/en/apps/oauth-apps/b
 - Callback: `https://<PUBLIC_HOST>/api/auth/callback/github`.
 
 Set `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` to its real client ID and secret.
-GitHub is still the only sign-in provider. Put the TLS certificate chain in
+GitHub is required; Google and GitLab are optional sign-in providers, configured with the credential pairs documented in the root README. Put the TLS certificate chain in
 `deploy/tls/fullchain.pem` and its private key in `deploy/tls/privkey.pem`.
 Protect these files and the Docker host. Environment values are visible to Docker
 administrators; `.env` is an installation secret store, not a multi-tenant vault.

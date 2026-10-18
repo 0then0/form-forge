@@ -1,0 +1,91 @@
+version: 2
+
+updates:
+  # One root entry owns the shared pnpm lockfile and every workspace manifest.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Europe/Moscow
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+      semver-patch-days: 3
+      semver-minor-days: 7
+    # Unlike an ignore rule, this SemVer restriction does not block security fixes.
+    allow:
+      - dependency-type: all
+        update-types:
+          - version-update:semver-patch
+          - version-update:semver-minor
+    groups:
+      react-next:
+        patterns:
+          [next, "react", "react-dom", "@types/react", "@types/react-dom"]
+        update-types: [minor, patch]
+      authentication:
+        patterns: [next-auth, "@auth/*"]
+        update-types: [minor, patch]
+      database:
+        patterns: [drizzle-orm, drizzle-kit, pg, "@types/pg"]
+        update-types: [minor, patch]
+      tailwind:
+        patterns: [tailwindcss, "@tailwindcss/*"]
+        update-types: [minor, patch]
+      radix:
+        patterns: ["@radix-ui/*"]
+        update-types: [minor, patch]
+      tanstack:
+        patterns: ["@tanstack/*"]
+        update-types: [minor, patch]
+      unit-testing:
+        patterns: [vitest, vite, jsdom]
+        update-types: [minor, patch]
+      component-testing:
+        patterns: ["@testing-library/*", msw]
+        update-types: [minor, patch]
+    # Unmatched packages (notably TypeScript and @types/node) get individual PRs.
+    # No security group: urgent fixes stay small and do not wait for unrelated work.
+    commit-message:
+      prefix: chore
+      include: scope
+
+  # Action major versions are reviewed individually on the monthly cadence.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+      time: "09:30"
+      timezone: Europe/Moscow
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore
+      include: scope
+
+  # Keep Node image changes out of application dependency PRs and coordinate the
+  # main Dockerfile with the disposable acceptance receiver's Node image.
+  - package-ecosystem: docker
+    directories: [/, /deploy/acceptance]
+    schedule:
+      interval: monthly
+      time: "10:00"
+      timezone: Europe/Moscow
+    cooldown:
+      default-days: 7
+    allow:
+      - dependency-name: node
+        update-types:
+          - version-update:semver-patch
+          - version-update:semver-minor
+    groups:
+      node-runtime:
+        group-by: dependency-name
+        patterns: [node]
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: chore
+      include: scope

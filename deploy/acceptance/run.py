@@ -375,8 +375,8 @@ with tempfile.TemporaryDirectory(prefix=project + "-") as temporary:
 insert into users(id,email) values ({quote(user)},{quote(slug + "@form-forge.invalid")});
 insert into workspaces(id,name,slug) values ({quote(workspace)},'Acceptance',{quote(slug)});
 insert into memberships(workspace_id,user_id,role) values ({quote(workspace)},{quote(user)},'owner');
-insert into forms(id,workspace_id,created_by,name,slug,status,draft_schema) values
-({quote(form)},{quote(workspace)},{quote(user)},'Acceptance',{quote(slug)},'published',{quote(json.dumps(schema))});
+insert into forms(id,workspace_id,created_by,name,slug,status,draft_schema,collect_metadata) values
+({quote(form)},{quote(workspace)},{quote(user)},'Acceptance',{quote(slug)},'published',{quote(json.dumps(schema))},true);
 insert into form_versions(id,form_id,version_number,schema,schema_hash,published_by) values
 ({quote(version)},{quote(form)},1,{quote(json.dumps(schema))},{quote(hashlib.sha256(json.dumps(schema).encode()).hexdigest())},{quote(user)});
 update forms set published_version_id={quote(version)} where id={quote(form)};
@@ -384,6 +384,15 @@ insert into webhook_endpoints(id,form_id,name,url,secret_ciphertext) values
 ({quote(endpoint)},{quote(form)},'Receiver',{quote("https://receiver.form-forge.invalid" + path)},{quote(encrypted)});
 commit;""")
         return slug, version
+
+    def persisted_outage(submission):
+        # after() now attempts ingestion after commit. Require the real failed
+        # attempt to settle before outage/backup assertions, rather than treating
+        # an intermediate lease as a completed backup boundary.
+        rows = sql(
+            f"select (select count(*) from submissions where id={quote(submission)}) as submissions, (select count(*) from outbox_events where aggregate_id={quote(submission)} and status='failed' and attempts >= 1) as outbox"
+        )
+        return rows if rows == [{"submissions": 1, "outbox": 1}] else None
 
     def state(submission):
         return sql(
@@ -594,8 +603,10 @@ commit;""")
         slug, version = fixture("/success")
         dc("stop", "inngest")
         submission, started = submit(slug, version, "scheduler-outage")
-        atomic = sql(
-            f"select (select count(*) from submissions where id={quote(submission)}) as submissions, (select count(*) from outbox_events where aggregate_id={quote(submission)} and status='pending') as outbox"
+        atomic = wait(
+            "committed outbox survives failed immediate ingestion",
+            lambda: persisted_outage(submission),
+            timeout=60,
         )
         assert atomic == [{"submissions": 1, "outbox": 1}]
         assert state(submission) == []
@@ -757,8 +768,10 @@ commit;""")
         pending_submission, pending_started = submit(
             slug, version, "cold-pending-outbox"
         )
-        atomic = sql(
-            f"select (select count(*) from submissions where id={quote(pending_submission)}) as submissions, (select count(*) from outbox_events where aggregate_id={quote(pending_submission)} and status='pending') as outbox"
+        atomic = wait(
+            "cold outbox immediate attempt settles before backup",
+            lambda: persisted_outage(pending_submission),
+            timeout=60,
         )
         if atomic != [{"submissions": 1, "outbox": 1}] or state(pending_submission):
             raise RuntimeError("Cold pending submission/outbox is not atomic")
