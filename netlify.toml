@@ -1,5 +1,7 @@
 [build]
   base = "."
+  # Git-triggered builds are skipped; manual build hooks bypass this check.
+  ignore = "exit 0"
   command = "pnpm exec turbo run build --filter=@form-forge/web..."
   publish = "apps/web/.next"
 

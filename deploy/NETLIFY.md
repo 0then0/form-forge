@@ -104,6 +104,45 @@ See [Next.js on Netlify](https://docs.netlify.com/build/frameworks/framework-set
 [monorepos](https://docs.netlify.com/build/configure-builds/monorepos/), and
 [dependency management](https://docs.netlify.com/build/configure-builds/manage-dependencies/).
 
+### Manual production deploys
+
+The repository's `ignore = "exit 0"` skips Git-triggered builds, including push
+and PR builds. Keep **Active builds** enabled in Netlify; **Stopped builds** also
+disables build hooks. Build hook requests bypass the ignore command.
+
+One-time setup:
+
+1. In Netlify, open **Project configuration → Developer settings → Continuous
+   deployment → Build hooks → Add build hook**. Name it `Manual production`,
+   choose `main`, and save.
+2. Copy the resulting URL without adding query parameters. In GitHub repository
+   **Settings → Secrets and variables → Actions → New repository secret**, save
+   it as **`NETLIFY_BUILD_HOOK`**. Do not commit or share the URL.
+
+To deploy, push the desired code to `main`, then open **GitHub Actions → Deploy
+production → Run workflow**, select `main`, and run it. The workflow sends a
+single request to Netlify for the latest remote `main` at build time. It does not
+pin the workflow's SHA: avoid pushing more changes while the deploy is starting
+if you need to deploy a particular revision. Dispatches from other branches are
+skipped. No checkout, dependency installation, migration, or GitHub token
+permissions are needed for this workflow.
+
+A green workflow means Netlify accepted the request, not that deployment
+succeeded. Check **Netlify → Deploys** for the build, deployed SHA and publication
+status. Requests are not automatically retried to avoid duplicate builds; inspect
+Deploys before rerunning after a network error. Workflow concurrency serializes
+trigger requests only, not the entire Netlify build. Keep automatic publishing
+enabled if successful manual builds should immediately update production.
+
+Database migrations remain a separate manual workflow and are not run by this
+deploy trigger. Resync Inngest after changing function definitions, as described
+below. The old Active/Stopped toggle sequence is no longer needed. Use this
+workflow for routine deploys rather than relying on the Netlify UI to bypass the
+ignore rule.
+
+See [ignore commands](https://docs.netlify.com/build/configure-builds/ignore-builds/)
+and [build hooks](https://docs.netlify.com/build/configure-builds/build-hooks/).
+
 ## 3. Set the Production environment
 
 Choose a permanent public URL, such as `https://PROJECT.netlify.app` or a custom

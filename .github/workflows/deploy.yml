@@ -1,0 +1,34 @@
+name: Deploy production
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: netlify-production-deploy-trigger
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Trigger Netlify production build
+        shell: bash
+        env:
+          NETLIFY_BUILD_HOOK: ${{ secrets.NETLIFY_BUILD_HOOK }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$NETLIFY_BUILD_HOOK" =~ ^https://api\.netlify\.com/build_hooks/[A-Za-z0-9_-]+$ ]]; then
+            echo "::error::Set NETLIFY_BUILD_HOOK to the unmodified Netlify build hook URL in repository Actions secrets."
+            exit 1
+          fi
+          curl --fail --silent --show-error \
+            --connect-timeout 10 --max-time 30 \
+            --request POST --data '{}' --output /dev/null \
+            "${NETLIFY_BUILD_HOOK}?trigger_branch=main"
+          echo "Netlify accepted the build request for the latest remote main commit."
+          echo "This workflow does not wait for the Netlify build or publication."
+          echo "View deployment status: https://app.netlify.com/projects/form-forge-0then0/deploys" >> "$GITHUB_STEP_SUMMARY"
