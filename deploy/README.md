@@ -1,4 +1,4 @@
-# Form Forge 0.1.0 self-hosting
+# Form Forge 0.2.0 self-hosting
 
 This is one single-host Docker Compose deployment, built from source for the
 installation's public hostname. See [release notes](RELEASE_NOTES.md) for the supported scope and
@@ -58,15 +58,15 @@ for the Docker build.
 
 ### Install from the source artifact
 
-The artifact contract is `form-forge-0.1.0.tar.gz`, `SOURCE.json`, and
+The artifact contract is `form-forge-0.2.0.tar.gz`, `SOURCE.json`, and
 `SHA256SUMS`. `SOURCE.json` records the commit ID and the SHA-256 hash of each
 source file. Checksums verify integrity, not publisher identity. Verify and extract
 the artifact supplied by your release maintainer:
 
 ```sh
 shasum -a 256 -c SHA256SUMS
-tar -xzf form-forge-0.1.0.tar.gz
-cd form-forge-0.1.0
+tar -xzf form-forge-0.2.0.tar.gz
+cd form-forge-0.2.0
 ```
 
 Published artifacts are available on the
