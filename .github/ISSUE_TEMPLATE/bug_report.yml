@@ -1,0 +1,44 @@
+name: Bug report
+description: Report a reproducible defect using synthetic data.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. For vulnerabilities, follow SECURITY.md instead.
+        Remove secrets, database URLs, personal data and real form responses from all examples and logs.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Include the release tag or commit SHA.
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Local development
+        - Docker Compose
+        - Netlify / Neon / Inngest Cloud
+        - Other (describe below)
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest reproducible example with synthetic data.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and diagnostics
+      description: Relevant OS, browser, Node.js/pnpm/PostgreSQL versions, redacted logs and screenshots. Never paste your env file.

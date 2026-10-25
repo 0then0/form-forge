@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/0then0/form-forge/blob/main/SECURITY.md
+    about: Read the private reporting instructions before disclosing security details.
+  - name: Setup and operations documentation
+    url: https://github.com/0then0/form-forge/blob/main/README.md#documentation
+    about: Installation, configuration, migration and troubleshooting guides.

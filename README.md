@@ -66,9 +66,11 @@ For production, use the [Docker Compose guide](deploy/README.md) or [Netlify gui
 
 ## Contributing
 
-Use the [development guide](docs/development.md) to run the checks relevant to your change. Integration and browser tests require disposable databases and remove test data. Keep changes focused and include tests for meaningful behavior changes.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, verification and pull request guidance, and follow the [Code of conduct](CODE_OF_CONDUCT.md). Integration and browser tests require disposable databases and remove test data.
 
 Report bugs and discuss changes through [GitHub Issues](https://github.com/0then0/form-forge/issues).
+
+For vulnerabilities, follow [SECURITY.md](SECURITY.md) instead of posting details publicly. See [CHANGELOG.md](CHANGELOG.md) for release history and unreleased changes.
 
 ## License
 

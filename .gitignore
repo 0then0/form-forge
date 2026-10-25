@@ -22,12 +22,14 @@
 
 # debug
 npm-debug.log*
+pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
 # local env files
-.env*.local
-.env
+.env*
+!.env.example
+!.env.production.example
 
 # netlify
 .netlify
@@ -54,3 +56,10 @@ next-env.d.ts
 **/installation.env
 **/backups/
 **/__pycache__/
+
+# Local tooling and private database exports
+.idea/
+*.swp
+*.swo
+*.dump
+*.backup

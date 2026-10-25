@@ -1,0 +1,22 @@
+name: Feature request
+description: Describe a user problem and a focused improvement.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Who encounters this problem, and what are they trying to achieve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the smallest useful improvement and alternatives considered.
+    validations:
+      required: true
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: Compatibility and self-hosting impact
+      description: Note dependencies, external services, data/privacy implications or migration needs, if known. Do not include sensitive data.
