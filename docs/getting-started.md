@@ -5,7 +5,7 @@
 ## Requirements
 
 - Node.js 22 (22.22.2 or newer), 24 (24.15.0 or newer), or 26 and newer, as specified in `package.json`.
-- pnpm 12.10.1, as pinned in `package.json`.
+- pnpm 12.17.0, as pinned in `package.json`.
 - PostgreSQL. The Docker example below uses PostgreSQL 16.
 - A GitHub OAuth application for signing in.
 - OpenSSL for the HTTPS receiver tests. Deployment utilities also require Python 3.9 or newer

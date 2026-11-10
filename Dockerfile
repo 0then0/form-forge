@@ -2,7 +2,7 @@
 FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS dependencies
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1 TURBO_TELEMETRY_DISABLED=1 LEFTHOOK=0
-RUN npm install --global pnpm@12.10.1
+RUN npm install --global pnpm@12.17.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/package.json
 COPY packages/form-schema/package.json packages/form-schema/package.json
