@@ -54,23 +54,33 @@ For production, use the [Docker Compose guide](deploy/README.md) or [Netlify gui
 
 ## Documentation
 
+Using Form Forge:
+
 - [Getting started](docs/getting-started.md): requirements, environment, database, OAuth and your first form.
-- [User guide](docs/user-guide.md): account linking, roles, archives, intake, privacy and response management.
-- [Public API, OpenAPI and MCP](docs/api.md): submission contracts, idempotency, quotas and authenticated integrations.
-- [Embedding](docs/embedding.md): iframe setup, automatic height, lifecycle events and cleanup.
-- [Webhooks](docs/webhooks.md): signature verification, retries, outbox delivery and recovery.
-- [Architecture](docs/architecture.md): workspace packages, data model and project scope.
-- [Development](docs/development.md): commands, CI, database tests and Playwright.
-- [Dependency maintenance](docs/dependency-maintenance.md): Dependabot schedules, security fixes and monthly reviews.
-- [Deployment and operations](docs/operations.md): production configuration, upgrades, backups and monitoring.
+- [User guide](docs/user-guide.md): forms, sign-in methods, intake controls, privacy, responses and roles.
+- [Public API, OpenAPI and MCP](docs/api.md): submission contract, idempotency, limits and integrations.
+- [Embedding](docs/embedding.md): iframe setup, automatic height and events.
+- [Webhooks](docs/webhooks.md): payload format, signature verification, retries and deduplication.
+
+Running an installation:
+
+- [Deployment and operations](docs/operations.md): configuration, reverse proxy, upgrades, backups and monitoring.
+- [Docker Compose](deploy/README.md): single-host installation, backup and restore.
+- [Netlify](deploy/NETLIFY.md): Netlify with Neon and Inngest Cloud.
+- [Deployment verification](deploy/VERIFICATION.md): automated checks and what they prove.
+
+Working on the project:
+
+- [Architecture](docs/architecture.md): repository layout, technology and data flow.
+- [Development](docs/development.md): commands, tests, CI and Playwright.
+- [Dependency maintenance](docs/dependency-maintenance.md): Dependabot, security updates and toolchain changes.
+- [Releasing](docs/releasing.md): versioning and the release workflow.
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, verification and pull request guidance, and follow the [Code of conduct](CODE_OF_CONDUCT.md). Integration and browser tests require disposable databases and remove test data.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks and pull request guidance, and follow the [Code of conduct](CODE_OF_CONDUCT.md).
 
-Report bugs and discuss changes through [GitHub Issues](https://github.com/0then0/form-forge/issues).
-
-For vulnerabilities, follow [SECURITY.md](SECURITY.md) instead of posting details publicly. See [CHANGELOG.md](CHANGELOG.md) for release history and unreleased changes.
+Report bugs and suggest features through [GitHub Issues](https://github.com/0then0/form-forge/issues). To report a vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening a public issue. See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## License
 

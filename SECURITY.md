@@ -2,37 +2,43 @@
 
 ## Supported versions
 
-Security fixes target the latest stable release. Older releases and prereleases
-do not have a separate maintenance commitment; upgrade to the latest stable
-version when a fix is available. See [releases](https://github.com/0then0/form-forge/releases)
-and [CHANGELOG.md](CHANGELOG.md). There is no guaranteed response or fix timeline.
+Security fixes are made for the latest stable release. Older releases and
+prereleases are not maintained separately; upgrade to the latest stable version
+when a fix is available. See the
+[releases](https://github.com/0then0/form-forge/releases) and
+[CHANGELOG.md](CHANGELOG.md).
 
-## Report a vulnerability privately
+There is no guaranteed response or fix time.
 
-Do not disclose exploitable vulnerabilities, credentials or submission data in
-public issues, PRs or discussions.
+## Reporting a vulnerability
 
-Use **Security → Advisories → Report a vulnerability** on
-[GitHub](https://github.com/0then0/form-forge/security/advisories/new) when private
-vulnerability reporting is enabled. If that option is unavailable, contact
-[the maintainer](https://github.com/0then0) through an available private contact
-method. If no private contact is listed, open a minimal issue requesting a private
-security contact, without describing the vulnerability or sharing a proof of concept.
-Private reporting must be enabled in GitHub repository settings; this file alone
-does not enable it.
+Please do not disclose vulnerabilities, credentials or response data in public
+issues, pull requests or discussions.
 
-Include the affected version or commit, deployment type, prerequisites, expected
-and observed behavior, impact and a minimal reproduction using synthetic data.
-Avoid live credentials and real responses. Test only installations you own or
-have permission to assess. Coordinate public disclosure after maintainers have
-assessed the report and users have a fix or mitigation.
+Report vulnerabilities privately through
+[GitHub Security Advisories](https://github.com/0then0/form-forge/security/advisories/new)
+(**Security → Advisories → Report a vulnerability**). If that option is not
+available, contact [the maintainer](https://github.com/0then0) through a private
+contact method listed on their profile. If you cannot find one, open an issue
+asking for a private security contact, without describing the vulnerability.
 
-## Operating an installation
+Please include:
 
-Deployment owners are responsible for access control, TLS, secrets, backups,
-dependency updates and monitoring. Follow the [operations guide](docs/operations.md)
-and the [dependency maintenance policy](docs/dependency-maintenance.md).
-Dependabot alerts and security updates require separate repository settings.
-Rotate exposed credentials at their source; removing them from a commit is not
-enough. Report an incident involving your own stored data to your installation's
-operator, and report a reproducible software vulnerability to the project.
+- the affected version or commit and deployment type;
+- prerequisites, expected and observed behavior, and impact;
+- a minimal reproduction using synthetic data.
+
+Do not use live credentials or real responses. Test only installations you own or
+have permission to test. We will coordinate public disclosure with you once the
+report has been assessed and a fix or mitigation is available.
+
+## Running an installation
+
+Operators are responsible for access control, TLS, secrets, backups, dependency
+updates and monitoring of their installation. Follow the
+[operations guide](docs/operations.md). If a credential is exposed, rotate it at
+its source; removing it from a commit is not enough.
+
+Report incidents involving data stored in a particular installation to that
+installation's operator. Report reproducible vulnerabilities in the software to
+this project.

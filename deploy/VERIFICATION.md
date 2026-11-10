@@ -1,7 +1,13 @@
-# Verification
+# Deployment verification
 
-Run the repository checks before packaging a release. Use disposable databases
-for integration and browser tests; those suites remove fixture data.
+This page lists the checks to run before a release or deployment and explains
+what each one does and does not prove.
+
+## Repository checks
+
+Run these from the repository root. Integration and browser tests delete their
+data, so point them at disposable databases only; see
+[Development](../docs/development.md) for database setup.
 
 ```sh
 pnpm format:check
@@ -15,111 +21,100 @@ pnpm build
 pnpm test:production
 ```
 
-Database setup and environment requirements are described in the
-[development guide](../docs/development.md). Deployment regression tests
-use Python 3.9 or newer and its standard library, temporary Git repositories, and an isolated Docker
-build context containing fake secrets. The Docker-context test is skipped when
-Docker is unavailable. Receiver tests use temporary TLS certificates and real
-HTTPS requests. Neither suite uses installation credentials.
+`pnpm test:deployment` tests the packaging, backup and acceptance utilities. It
+needs Python 3.9 or newer and uses only the standard library, temporary Git
+repositories, fake secrets and temporary TLS certificates. The test that builds
+the Docker context is skipped when Docker is unavailable. None of these tests use
+installation credentials.
 
-## Real scheduler and transport
+## Automated acceptance test
+
+The acceptance runner deploys the real Docker Compose stack on a disposable host:
 
 ```sh
 python3 deploy/acceptance/run.py --cold-restore-only --output deploy/evidence/local.json
 ```
 
-Omit `--cold-restore-only` to also run the existing retained-store restart and
-lost-acknowledgement drills. The full cold-restore milestone uses the command above.
+Without `--cold-restore-only`, it also runs restart and lost-acknowledgement
+drills on the original installation before the backup and restore.
 
-The runner builds the application and migration images, creates a unique Compose
-project with empty volumes and temporary keys, and exercises:
+The runner builds the application and migration images, creates a Compose
+project with empty volumes and temporary keys, and checks:
 
-- Runtime production guards, hostname consistency, migration readiness and
-  repeatable migrations.
-- Private services, ingress client-IP replacement, signed Inngest invocations,
-  registration of all three functions and actual completed five-minute cron runs.
-- Atomic submission/outbox persistence during a scheduler outage and normal
-  cron recovery after restart.
-- Real HTTPS delivery with raw-byte HMAC verification, a persisted 503 and
-  restored retry history/budget. The default extended run also checks graceful
-  scheduler restart, lost ACK/lease recovery and retained PostgreSQL/Redis restarts.
-- A full maintenance cold
-  restore of PostgreSQL, SQLite and Redis into a separate project with three new
-  empty volumes, using the real backup script and preserved installation keys.
-- Pending outbox, pending retry with retained logical ID/history/budget, completed
-  delivery preservation and two additional completed recovery ticks after pending
-  work finishes. The shared controlled receiver retains its ordinals/observations.
-- Complete backup checksum coverage, corrupted-archive refusal before destination
-  startup, and wrong-key decryption refusal before workers.
-- Source/destination volume, mount, network, container and database-address isolation;
-  full scheduler-directory file hashes, SQLite registration/event/run identities and
-  surviving Redis content digests checked before scheduler startup.
+- production configuration guards, hostname consistency, migration readiness and
+  that migrations can be applied again;
+- that only the ingress is public, that the ingress replaces the client IP header,
+  that Inngest calls are signed, that all three functions are registered and that
+  the five-minute cron job completes;
+- that a response and its outbox event are saved together while the scheduler is
+  stopped, and are delivered after it restarts;
+- real HTTPS delivery with signature verification over the raw request bytes,
+  including a `503` response followed by a successful retry;
+- in the extended run: graceful scheduler restart, recovery after a worker is
+  killed before acknowledging a delivery, and PostgreSQL and Redis restarts;
+- a full backup with `deploy/backup.sh` and a restore of PostgreSQL, SQLite and
+  Redis into a second project with new, empty volumes and the preserved keys;
+- after the restore: pending outbox events and retries keep their delivery IDs,
+  history and attempt budgets, completed deliveries are not resent, and two more
+  recovery runs complete;
+- that the backup checksums cover every file, that a corrupted archive is rejected
+  before anything is restored, and that a wrong encryption key is detected before
+  workers start;
+- that the restored project shares no volumes, mounts, networks, containers or
+  database addresses with the source, and that the restored scheduler files,
+  SQLite records and Redis contents match the backup.
 
-The report records source hashes, commit, dirty-checkout state, component versions,
-architecture, UTC times, database transitions, receiver metadata and cleanup.
-A successful run requires all scenarios and resource cleanup to pass. A failed
-run returns a nonzero exit code and retains its report. Images and build cache
-remain available; the runner never performs a global Docker prune.
+The JSON report records source hashes, the commit and whether the checkout had
+local changes, component versions, architecture, UTC times, database transitions,
+receiver metadata and cleanup. The run passes only when every scenario and the
+cleanup pass. A failed run exits with a nonzero status and keeps its report.
+Images and the build cache are kept; the runner never prunes Docker globally.
 
-Results are installation-specific artifacts under ignored `deploy/evidence/`.
-Do not commit reports, credentials, submission bodies or database dumps. Record
-checks as passed, failed or not run; do not substitute test timestamps or generated
-IDs for evidence from your own installation.
+Reports are written to `deploy/evidence/`, which Git ignores. Do not commit
+reports, credentials, response bodies or database dumps.
 
-## Limits
+### Limits of the automated test
 
-The fixture maps an HTTPS hostname onto an isolated internal Docker network and
-trusts its temporary CA only inside the test web container. It verifies the
-production transport and target policy, but not public DNS, certificate issuance
-or GitHub OAuth. Follow [public installation verification](acceptance/README.md)
-on a disposable installation with your own hostname, OAuth app and receiver.
+The test receiver uses an HTTPS hostname on an internal Docker network with a
+temporary certificate authority that only the test container trusts. This checks
+the production HTTPS client and webhook target rules, but not public DNS,
+certificate issuance or GitHub sign-in. Complete the
+[installation checklist](acceptance/README.md) on a disposable installation with
+your own hostname, OAuth app and receiver.
 
-The runner performs the
-[complete three-store backup and restore](README.md#backup-and-isolated-restore),
-including pending work. It checks the pinned 1.46.0 SQLite schema and Redis
-content diagnostically; those internal structures are not a cross-version API.
-Redis keys expiring during restore are reported separately. Exact archived files
-are compared before Redis starts, so expiration cannot hide an omitted archive.
-The retry delay lives in application PostgreSQL/outbox; the drill does not claim
-that every application retry corresponds to a restored sleeping Inngest run.
-No source containers/volumes are used after backup except the explicitly shared
-external receiver fixture. Browser tests use fixture sessions and pipeline
-controls. Unit/integration tests cannot replace real scheduler acceptance.
+The SQLite and Redis comparisons depend on the internal formats of Inngest 1.46.0
+and are diagnostic, not a compatibility guarantee across versions. Retry timing
+is stored in the application database; the test does not claim that each pending
+retry has a matching restored Inngest run.
 
-The reference deployment targets one host and at-least-once delivery. Validate
-other CPU architectures, future-version upgrades and expected capacity in your environment. Graceful restart results do not prove
-power-loss durability, point-in-time recovery or high availability. Receivers must
-persistently deduplicate logical delivery IDs before performing side effects.
+The reference deployment runs on one host with at-least-once delivery. Validate
+other CPU architectures, upgrades between future versions and your expected load
+yourself. Graceful restarts do not prove durability after power loss,
+point-in-time recovery or high availability.
 
-## Product controls after 0.1.0
+## What the application tests cover
 
-Migration `0006_product_controls` is additive: it preserves metadata collection on
-pre-existing forms, defaults new forms to collection off, initializes lifetime
-accepted counts from existing responses and adds independent processing status,
-expiring deletion-key hashes and a PostgreSQL GIN value-search index. Published
-schemas and prior values are not rewritten. Apply migrations to a disposable local
-database for verification; production upgrades require the normal operator-led
-maintenance/backup procedure. The index build uses the normal migration transaction,
-so large installations should schedule a maintenance window.
+Unit, component, PostgreSQL integration and Playwright tests cover the product
+behavior. In particular:
 
-The integration suite upgrades a real pre-0006 fixture and checks privacy in both
-the receive service and HTTP route, rolling abuse counters, last-place admission,
-old-version closure, deletion rollback/worker conflicts (including cron paused
-between due selection and outbox insertion), key expiry, roles/workspace
-isolation and list/CSV consistency. Component tests exercise optional collection,
-embed origin/source/channel validation and observer cleanup, while Playwright
-exercises intake changes in an already-open page, immutable processing updates,
-confirmed deletion, fresh cached lists after client navigation and multiple cross-origin iframe heights through validation,
-conditional fields and success. MCP/OpenAPI tests cover session/origin protection,
-bounded shared arguments and actual request schemas. No snapshots are regenerated.
+- **Intake and privacy:** source metadata collection is enforced by both the
+  submission service and the HTTP route; rate-limit counters; two visitors
+  competing for the last place; closing a form that visitors already have open.
+- **Response deletion:** rollback when deletion conflicts with a worker, including
+  a recovery job that has selected due work but not yet inserted its outbox row;
+  expiry of deletion markers.
+- **Access:** workspace roles and isolation between workspaces.
+- **Responses:** list and CSV export consistency, processing status updates that
+  never change submitted values, and fresh lists after client-side navigation.
+- **Embedding:** origin, window and channel validation, observer cleanup, and
+  height changes of several cross-origin iframes through validation errors,
+  conditional fields and the success message.
+- **OpenAPI and MCP:** session and origin protection, bounded arguments, and that
+  the published schemas match the request validators.
+- **Upgrades:** applying migrations to a database with data from before the
+  intake and privacy controls.
 
-The real scheduler outage fixture explicitly waits for the failed immediate
-ingestion attempt before checking atomicity or taking the cold backup boundary;
-its proxy-fingerprint scenario explicitly opts into metadata collection.
-The development browser fixture waits for the immediate ingestion outage attempt
-before advancing the test-only scheduling clock. This is not evidence of real
-Inngest transport. Continue to run the real scheduler/HTTPS acceptance drill for
-a deployment; unit, integration, component and Playwright checks do not validate
-Netlify's installed adapter or an external receiver. The immediate path uses
-Next.js `after` plus Inngest steps, bounded HTTP attempts, and the same claims and
-stable event IDs as the five-minute recovery path.
+Browser tests use test sessions and a test-only control for scheduling, so they
+do not exercise real Inngest transport. Only the acceptance test above, or your
+own installation checks, verify real scheduling, Netlify's adapter or an external
+receiver.

@@ -1,17 +1,20 @@
-# Public installation verification
+# Installation checklist
 
-Do this on a disposable installation, with your own public domain, GitHub OAuth
-application and controlled public HTTPS receiver. Do not use shared/production
-resources or someone else's endpoint. The [automated runner](run.py) performs the complete maintenance cold restore,
-including pending outbox/retry and completed delivery, on two independent Compose
-projects. Run `python3 deploy/acceptance/run.py --cold-restore-only --output deploy/evidence/local.json`
-from the source root. It requires free loopback ports 18443 and 19443 and the fixture
-subnet. No live installation is required for this automated drill;
-public DNS, TLS and OAuth require these installation-specific checks.
+Use this checklist to verify a real installation: public TLS, GitHub sign-in,
+webhook delivery to a public receiver, and recovery. Run it on a disposable
+installation with your own domain, GitHub OAuth app and an HTTPS receiver you
+control. Never use shared or production resources, or someone else's endpoint.
+
+The [automated acceptance test](../VERIFICATION.md#automated-acceptance-test)
+covers delivery, backup and restore on a local, isolated network, but cannot
+check public DNS, TLS certificates or live OAuth. This checklist covers those.
+
+The commands below use the `dc` function from the
+[installation guide](../README.md#3-build-migrate-and-start).
 
 ## Public TLS and OAuth
 
-Install using [the guide](../README.md), then verify the certificate without
+Install using [the guide](../README.md), then check the certificate without
 `--insecure`:
 
 ```sh
@@ -21,9 +24,9 @@ curl -i https://<PUBLIC_HOST>/api/inngest
 
 The first must render and the second must return 404 at ingress. From another
 machine verify origin port 3000 and ports 5432, 6379, 8288, 8289 are unreachable.
-Sign in through the real GitHub OAuth flow; verify callback and a new personal
-workspace, then test owner/editor/viewer permissions with real accounts. Fixture
-sessions and a production configuration check are not live OAuth evidence.
+Sign in through GitHub and check that the callback succeeds and a personal
+workspace is created. Then test owner, editor and viewer permissions with real
+accounts.
 
 ## Public receiver
 
@@ -92,5 +95,4 @@ Record the release/commit/source checksum, component digests, UTC times, logical
 event/delivery IDs, transitions, completed cron run IDs, receiver verification and
 recovery duration relative to due time and cron tick. Exclude credentials, OAuth
 tokens, sessions and submission bodies. Mark each check passed, failed or not run,
-with the exact missing prerequisite. Public networking and live OAuth are not
-certified by the local runner or the existing Playwright tests.
+with the exact missing prerequisite.

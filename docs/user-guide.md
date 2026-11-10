@@ -2,99 +2,157 @@
 
 [Project overview](../README.md) · [Documentation](../README.md#documentation)
 
+This guide covers the administration interface: building and publishing forms,
+controlling intake, managing responses and sharing a workspace.
+
 ## Forms and fields
 
-The schema editor offers a live preview, shared validation and conditional field
-visibility. Supported fields are short text, long text, email, number, select,
-checkbox and date. Checkbox fields can include agreement links with separate link
-text and an HTTP/HTTPS URL.
+The schema editor shows a live preview and uses the same validation as the
+public form. Supported field types are short text, long text, email, number,
+select, checkbox and date. Fields can be shown or hidden based on earlier
+answers. Checkbox fields can include agreement links, each with its own link
+text and an HTTP or HTTPS URL.
 
-Edit a draft, then publish an immutable version. Compare published versions or
-restore one into a new draft revision; existing responses retain their original
-version. The administration interface supports system, light and dark themes.
+You edit a draft and publish it as an immutable version. You can compare
+published versions and restore any of them into a new draft. Existing responses
+always keep a reference to the version they were submitted against.
+
+The interface supports system, light and dark themes.
 
 ## Sign-in methods and account linking
 
-GitHub remains the required default provider. Enable additional providers by setting
-both `AUTH_<PROVIDER>_ID` and `AUTH_<PROVIDER>_SECRET` (`GOOGLE`, `GITLAB`).
-Unconfigured methods are shown as unavailable. Register these exact callback paths
-under your `NEXTAUTH_URL` origin:
+GitHub sign-in is required. Google and GitLab are optional: enable each by
+setting both `AUTH_<PROVIDER>_ID` and `AUTH_<PROVIDER>_SECRET`, with `GOOGLE` or
+`GITLAB` as the provider name. Methods that are not configured are shown as
+unavailable on the sign-in page. Register these callback paths under your
+`NEXTAUTH_URL` origin:
 
 - `/api/auth/callback/github`
 - `/api/auth/callback/google`
 - `/api/auth/callback/gitlab`
 
-Open **Account** from the header and confirm **Link** for another sign-in method.
-NextAuth attaches the verified provider account to the current user, preserving the
-same user ID and workspace memberships. Email matches never automatically merge
-accounts. When an email is already registered, sign in with the original method first.
-A provider identity already attached to a different user cannot be transferred or
-merged by this flow. Linking does not change the account's original profile/email.
+To add another sign-in method to your account, open **Account** from the header
+and choose **Link**. The new provider account is attached to your current user,
+which keeps the same user ID and workspace memberships.
+
+Accounts are never merged automatically by email address. If an email address is
+already registered, sign in with the original method first and link the other
+method from **Account**. A provider identity that is already attached to another
+user cannot be moved by linking. Linking does not change the account's original
+profile or email address.
 
 ## Archived forms
 
-Archived forms are available under **Forms → Archived**. Open a form to review its saved draft, all field names and published version history in a read-only view. Restoring a previously
-published form makes its existing public URL available again. Workspace owners can
-permanently delete an archived form after typing its name; this removes its versions,
-submissions, webhook endpoints, delivery history and queued outbox events. Audit logs
-and consumed usage reservations remain. Background processing and in-flight webhook deliveries must finish first.
+Archived forms are listed under **Forms → Archived**. Open one to review its
+saved draft, field names and published version history in read-only mode.
+Restoring a form that was published before makes its public URL available again.
 
-## Intake and response management
+Workspace owners can permanently delete an archived form after typing its name.
+This removes its versions, responses, webhook endpoints, delivery history and
+queued outbox events. Audit logs and consumed daily quota remain. Background
+processing and in-progress webhook deliveries for the form must finish first.
 
-Use **Intake and privacy** in the form editor to pause or resume, set a closing time
-in **UTC**, set a maximum accepted-response count, and customize the closed message.
-These settings take effect immediately for every published version, including old
-open tabs. Archive retains its previous behavior and takes the public form offline.
-Closing time is checked against the database clock on each new acceptance; it does
-not need a frequent cron. Resuming also requires clearing an elapsed time or raising
-an exhausted limit. Empty time/maximum means unlimited.
+## Intake controls
 
-Admission, usage reservation, the lifetime accepted count, response insertion and
-outbox share the form's transaction/row lock. Concurrent requests cannot take the
-same last place. An identical successful idempotent retry returns the existing
-response before the intake checks and consumes no extra place or daily quota.
-Deleting a response **does not decrement** the accepted count or return quota.
-Migration `0006` initializes the count from existing responses.
+Open **Intake and privacy** in the form editor to:
 
-The submissions page keeps cursor pagination and offers **from inclusive / until
-exclusive** date bounds (UTC), a new/processed filter and PostgreSQL word search.
-Search is case-insensitive, accepts 2–100 characters, uses the built-in `simple`
-dictionary and searches values, including numeric/boolean values, rather than field
-keys. It matches whole words, supports PostgreSQL web-search phrases/operators,
-and uses a GIN index; there is no separate search service. List pages are capped
-at 100 records. Choose display columns and up to 20 answer-field columns from loaded
-pages; form identity remains visible. CSV always includes all matching answer
-fields, independently of display-column selection. The new `processing_status`
-column is appended after the existing columns, preserving their previous order. Export caps and spreadsheet
-formula escaping remain in force. If a response is deleted after an export starts
-but before its batch is read, the stream fails instead of silently omitting it. Changing new/processed status never changes
-original values, normalized values or historical version; delivery status is separate.
+- pause or resume the form;
+- set a closing time, in UTC;
+- set a maximum number of accepted responses;
+- customize the message shown when the form is closed.
 
-Workspace owners can delete an individual response from its detail page after
-entering its full ID. The transaction removes values, metadata, deliveries, attempts,
-submission events and associated outbox work; it retains the form's shared webhook
-endpoints. Busy worker rows, dispatcher leases or in-flight HTTP deliveries return
-`409` with a retry message, and the failed deletion releases every acquired lock.
-Deletion audit records contain actor/workspace/form/response IDs and time, never
-answer values. Audit history follows the installation's audit/backup lifetime;
-this release adds no automatic response or audit retention.
+Leave the closing time or maximum empty for no limit. These settings take effect
+immediately for every published version, including pages that visitors already
+have open. Archiving a form also takes it offline.
 
-For **30 days from deletion**, the form ID and a keyed HMAC of the idempotency key
-are retained, with an expiry, to reject a replay with `409` instead of restoring the
-response. No key plaintext, values or visitor identity are kept in that marker.
-Expired markers are ignored immediately and removed by recovery cleanup. After
-30 days, replaying that key is a new response subject to current intake and quotas;
-clients must stop retries after a deletion conflict. Keep `FINGERPRINT_SECRET`
-stable: rotating it invalidates both abuse subjects and these deletion markers.
+The closing time is checked against the database clock for each new response, so
+no scheduled job is needed. To resume a form after its closing time has passed or
+its limit was reached, also clear the time or raise the limit.
 
-Deletion covers the live Form Forge database. Backup copies and data already
-received by external systems must be removed separately. Automatic retention is
-outside this stage.
+Two visitors can never take the same last place: admission, quota, the accepted
+count and the response itself are written in one transaction under a lock on the
+form. Retrying a successful submission with the same idempotency key returns the
+existing response and does not take another place or consume quota. Deleting a
+response does not lower the accepted count or return quota.
+
+## Privacy and source metadata
+
+Each form controls whether it collects source metadata: a visitor ID, the
+referrer, UTM parameters and the user agent. Collection is off by default for new
+forms. When it is off, the hosted form does not create a persistent visitor ID or
+send this context, and the server does not store it even if an API client sends
+it. Turning collection off does not erase metadata saved earlier. Form Forge
+never stores unfinished responses.
+
+## Responses
+
+The **Submissions** page lists responses with cursor pagination, up to 100 per
+page. You can filter by:
+
+- date, with an inclusive start and exclusive end, in UTC;
+- processing status, new or processed;
+- answer text.
+
+Answer search is case-insensitive, accepts 2 to 100 characters and matches whole
+words in answer values, including numbers and booleans, but not field keys. It
+supports PostgreSQL web-search syntax such as quoted phrases and `-word`, and
+uses a PostgreSQL GIN index; no separate search service is required.
+
+You can choose which columns to display, including up to 20 answer fields. The
+form name always stays visible.
+
+Editors and owners can mark a response as new or processed. This status is
+independent of delivery status and never changes the submitted values or the
+version the response belongs to.
+
+### CSV export
+
+CSV export uses the same filters as the list, but always includes every answer
+field, regardless of which columns are displayed. Columns are `submission_id`,
+`form`, `version`, `received_at`, `delivery_status`, one column per answer field,
+and `processing_status`. An export is limited to 10,000 responses and 500
+distinct field keys. Values that a spreadsheet could interpret as formulas are
+escaped.
+
+The export captures the matching responses when it starts, so new responses and
+later status changes do not change an export in progress. If a selected response
+is deleted before the export reads it, the export fails instead of silently
+omitting it.
+
+### Deleting a response
+
+Workspace owners can delete a single response from its detail page after typing
+its full ID. Deletion removes the answers, metadata, deliveries, delivery
+attempts, events and queued outbox work for that response. The form's webhook
+endpoints are kept. If a worker is processing the response at that moment, the
+request returns `409` and can be retried shortly; a failed deletion changes
+nothing.
+
+The audit log records who deleted which response and when, but not its answers.
+
+For 30 days after deletion, Form Forge keeps the form ID and a keyed hash of the
+response's idempotency key. A client that replays the same key during this period
+receives `409` instead of recreating the response. The marker contains no answers,
+original key or visitor identity. After 30 days, the same key creates a new
+response, so API clients must stop retrying after a deletion conflict. Keep
+`FINGERPRINT_SECRET` stable: rotating it invalidates these markers and the
+abuse-protection identities.
+
+Deletion applies to the live database only. Remove copies in backups and in
+systems that already received the data through webhooks separately. Form Forge
+does not delete responses or audit records automatically.
 
 ## Workspace access
 
-- **Owner:** all actions, including individual response deletion, webhook endpoint and membership management.
-- **Editor:** edit and publish forms, change intake/privacy policy, restore drafts, view/export responses, mark responses new/processed and retry failed deliveries.
-- **Viewer:** read-only access to forms, versions, submissions, and deliveries, including CSV export.
+- **Owner:** all actions, including deleting responses and managing webhook
+  endpoints and members.
+- **Editor:** edit and publish forms, change intake and privacy settings, restore
+  drafts, view and export responses, mark responses new or processed, and retry
+  failed deliveries.
+- **Viewer:** read-only access to forms, versions, responses and deliveries,
+  including CSV export.
 
-Admin operations enforce workspace membership and role permissions on the server. To add a member by email, that person must first sign in to Form Forge; email invitations are not implemented.
+The server checks workspace membership and role for every administrative action.
+Your first sign-in creates a personal workspace. To add a member by email, that
+person must sign in to Form Forge once first; email invitations are not
+available.

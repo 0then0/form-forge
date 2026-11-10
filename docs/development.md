@@ -24,7 +24,7 @@ pnpm db:studio     # Open Drizzle Studio
 
 Database commands require `DATABASE_URL` in the shell. Biome formats and lints JavaScript, TypeScript, JSON, and CSS. Prettier formats Markdown and YAML. TypeScript 7.0.2 checks types through the native compiler CLI, including during `next build`. Biome enables Promise checks, but these rules are experimental and do not guarantee identical coverage to typescript-eslint. Lefthook checks staged code with Biome and formats staged Markdown and YAML with Prettier; it does not run tests.
 
-`db:migrate` runs the existing Drizzle ORM migrator through `apps/web/scripts/migrate.mjs`, with explicit connection cleanup, bounded waits and redacted errors. It preserves the SQL files, journal hashes, timestamps and migration history used by Drizzle Kit. `db:generate` and `db:studio` still use Drizzle Kit. Neon installations can use the [manual GitHub Actions workflow](../deploy/NETLIFY.md#manual-github-actions-run-recommended-for-neon) instead of connecting from a local computer. It is separate from CI and never runs automatically on push.
+`db:migrate` runs the existing Drizzle ORM migrator through `apps/web/scripts/migrate.mjs`, with explicit connection cleanup, bounded waits and redacted errors. It preserves the SQL files, journal hashes, timestamps and migration history used by Drizzle Kit. `db:generate` and `db:studio` still use Drizzle Kit. Neon installations can use the [manual GitHub Actions workflow](../deploy/NETLIFY.md#option-a-github-actions-recommended) instead of connecting from a local computer. It is separate from CI and never runs automatically on push.
 
 ## Continuous integration
 

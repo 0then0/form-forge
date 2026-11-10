@@ -1,26 +1,40 @@
 # Changelog
 
-User-visible changes are recorded here. Versions correspond to
-[GitHub releases](https://github.com/0then0/form-forge/releases); detailed upgrade
-instructions accompany each release. Unreleased changes are not part of the latest
-tagged source archive.
+All notable user-visible changes are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions match
+[GitHub releases](https://github.com/0then0/form-forge/releases), where each
+release also includes detailed upgrade instructions.
 
 ## [Unreleased]
 
 ### Added
 
-- Manual GitHub Actions workflow for Neon migrations with a separate database
-  secret, and a separate manual Netlify production build trigger.
-- Repository contribution and security policies, community templates, editor
-  settings and Git file handling conventions.
+- Manually started GitHub Actions workflows for Neon database migrations and
+  Netlify production deploys.
+- Contribution guide, security policy, code of conduct, issue and pull request
+  templates, and a releasing guide for maintainers.
+
+### Changed
+
+- Docker images and the Netlify build use Node.js 24.22.0. The pinned pnpm
+  version is 12.17.0.
+- Dependencies updated, including Next.js 16.4.5 and the Sentry SDK.
+- Documentation rewritten for new users and operators.
 
 ### Fixed
 
-- Migration command handles transport errors, limits connection and SQL waits,
-  closes connections and reports errors without printing SQL or credentials.
-  It preserves existing Drizzle migrations and history and does not retry
-  automatically. Remote migration execution can bypass a failing local network
-  path; the cause of local Neon `ETIMEDOUT` failures remains unconfirmed.
+- `pnpm db:migrate` closes its connection on network errors, limits connection,
+  lock and statement waits, and reports failures without printing SQL or
+  credentials. It does not retry automatically and keeps the existing migration
+  history.
+
+### Security
+
+- Removed vulnerable transitive versions of glob, minimatch and esbuild
+  ([GHSA-3g3m-2fjr-6pw4](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4),
+  [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249),
+  [GHSA-67mh-4wv8-2f99](https://github.com/advisories/GHSA-67mh-4wv8-2f99)).
+  None of the affected code paths were reachable in production.
 
 ## [0.2.0] - 2026-10-18
 

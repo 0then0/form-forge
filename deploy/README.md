@@ -1,51 +1,54 @@
-# Form Forge 0.2.0 self-hosting
+# Self-hosting with Docker Compose
 
-This is one single-host Docker Compose deployment, built from source for the
-installation's public hostname. See [release notes](RELEASE_NOTES.md) for the supported scope and
-[verification](VERIFICATION.md) for reproducible checks and their limits.
+This guide installs Form Forge on a single Linux host with Docker Compose. The
+images are built from source for your public hostname. For managed hosting, see
+the [Netlify guide](NETLIFY.md) instead.
 
-## Contract and prerequisites
+The stack contains:
 
-- A dedicated Linux Docker host with Compose v2 or newer, persistent local disk,
-  and a public DNS hostname pointing to that host. The reference configuration is verified with Linux arm64 containers.
-  Validate other architectures on a disposable host before deployment.
-- An owner-managed, publicly trusted TLS certificate and private key for the
-  hostname. Renew them outside this stack and reload Nginx after renewal.
-- Python 3.9 or newer, OpenSSL, and `shasum` for packaging and backups.
-  Automated acceptance also requires curl.
-- A GitHub OAuth application and a controlled public HTTPS webhook receiver for
-  installation-specific acceptance. The local acceptance fixture requires none
-  of these external accounts and does not validate live OAuth.
-- Docker registry and package registry access at build/pull time. Production
-  startup installs no packages. Dependencies are pinned by `pnpm-lock.yaml` and
-  installed with pnpm 12.17.0 and `--frozen-lockfile`.
+- **nginx:** the only public service. It terminates TLS on port 443.
+- **web:** the Next.js application.
+- **postgres:** the application database (`form_forge`), stored in the
+  `application-data` volume.
+- **inngest:** a self-hosted [Inngest](https://www.inngest.com/docs/self-hosting)
+  scheduler. Its configuration and history use SQLite in the `scheduler-history`
+  volume.
+- **redis:** Inngest's queue and run state, password-protected, in the
+  `scheduler-queue` volume. It uses AOF persistence with `appendfsync always` and
+  the `noeviction` policy.
+- **migrate:** a one-off service that applies database migrations.
 
-Runtime images are pinned by tag **and digest** in Compose/Dockerfile: Node
-24.22.0 (Debian bookworm slim), PostgreSQL 16.14, Redis 7.4.8, Inngest 1.46.0,
-Nginx 1.30.5. Next.js 16.4.0 and Inngest SDK 4.23.0 come from the existing lockfile.
-No additional dependency is required.
+Images are pinned by tag and digest: Node.js 24.22.0 (Debian bookworm slim),
+PostgreSQL 16.14, Redis 7.4.8, Inngest 1.46.0 and Nginx 1.30.5. Application
+dependencies are installed from `pnpm-lock.yaml` with pnpm 12.17.0 and
+`--frozen-lockfile`; nothing is installed when containers start.
 
-The application database is `form_forge` in PostgreSQL, with its own credentials
-and `application-data` volume. Scheduler configuration and history live in
-SQLite under `/var/lib/inngest` in `scheduler-history`. Queue and run state live
-in a separate password-protected Redis in `scheduler-queue`, with AOF enabled,
-`appendfsync always`, and `noeviction`. The SQLite filesystem boundary replaces
-a scheduler database credential; Redis credentials are separate from application
-database credentials. Inngest's default in-memory Redis is not used.
+This is a single-host setup. It survives container recreation and graceful
+restarts, but does not provide high availability, multi-host operation or
+point-in-time recovery, and is not designed to survive power loss without data
+loss.
 
-This configuration follows the [Inngest self-hosting documentation](https://www.inngest.com/docs/self-hosting)
-and the flags verified against [Inngest 1.46.0](https://github.com/inngest/inngest/releases/tag/v1.46.0).
-It provides storage across container recreation and measured graceful scheduler
-restart. It makes no power-loss, HA, multi-host, or point-in-time recovery claim.
-Redis fsync cannot by itself establish a cross-store consistency guarantee.
+## Requirements
 
-## Obtain the source
+- A dedicated Linux host with Docker and Compose v2, persistent local disk, and a
+  public DNS name pointing to it. The reference configuration is tested with
+  Linux arm64 containers; test other architectures on a disposable host first.
+- A publicly trusted TLS certificate and private key for that name. Renew them
+  outside this stack and reload Nginx afterwards.
+- Python 3.9 or newer, OpenSSL and `shasum` for backups and source packages, and
+  curl for the automated acceptance test.
+- A GitHub OAuth application.
+- Access to Docker Hub and the npm registry while building.
 
-Use a reviewed commit from the [repository](https://github.com/0then0/form-forge)
-or a source archive supplied by your release maintainer. Keep the commit ID and
-checksums with the installation record; a moving branch does not identify a release.
+Node.js and pnpm are not needed on the host.
 
-For a source checkout, replace `<RELEASE_COMMIT>` with the reviewed commit ID:
+## 1. Get the source
+
+Use a [release](https://github.com/0then0/form-forge/releases) or a reviewed
+commit. Record the commit ID or the release checksums with your installation; a
+branch name does not identify a version.
+
+From Git, replace `<RELEASE_COMMIT>` with a release tag or commit ID:
 
 ```sh
 git clone https://github.com/0then0/form-forge.git
@@ -53,41 +56,19 @@ cd form-forge
 git checkout <RELEASE_COMMIT>
 ```
 
-Continue with **Configure once** below. Local Node.js and pnpm are not required
-for the Docker build.
-
-### Install from the source artifact
-
-The artifact contract is `form-forge-0.2.0.tar.gz`, `SOURCE.json`, and
-`SHA256SUMS`. `SOURCE.json` records the commit ID and the SHA-256 hash of each
-source file. Checksums verify integrity, not publisher identity. Verify and extract
-the artifact supplied by your release maintainer:
+From a release archive, download `form-forge-<version>.tar.gz`, `SOURCE.json` and
+`SHA256SUMS` from the same release, then verify and extract:
 
 ```sh
 shasum -a 256 -c SHA256SUMS
-tar -xzf form-forge-0.2.0.tar.gz
-cd form-forge-0.2.0
+tar -xzf form-forge-<version>.tar.gz
+cd form-forge-<version>
 ```
 
-Published artifacts are available on the
-[GitHub Releases page](https://github.com/0then0/form-forge/releases). Verify all
-three files from the same release before extracting the archive.
+`SOURCE.json` records the commit ID and the SHA-256 hash of every source file.
+Checksums verify integrity, not who published the files.
 
-For maintainers, generate this artifact from a clean, committed checkout with
-`python3 deploy/package.py`. It does not commit, create a tag, push, publish an
-image, or create a GitHub Release. Re-running it against identical source produces
-the same checksums. The packager refuses dirty checkouts and includes only tracked regular files. The application and
-workspace npm packages keep their existing internal `0.0.0` versions; the
-deployment release version is `deploy/VERSION`.
-
-To publish a reviewed revision, push a tag named `v<deploy/VERSION>`. The
-[release workflow](../.github/workflows/release.yml) checks that the tag matches
-that version, packages the committed source, verifies checksums, uploads the
-three artifacts to a draft GitHub Release, then publishes it. Versions containing
-a hyphen, such as `0.2.0-rc.1`, are published as prereleases. The workflow uses
-GitHub's scoped job token and requires no registry or personal access credentials.
-
-### Configure once
+## 2. Configure
 
 ```sh
 cp deploy/.env.example deploy/.env
@@ -95,42 +76,48 @@ chmod 600 deploy/.env
 mkdir -m 700 deploy/tls
 ```
 
-Edit `deploy/.env`. Set `PUBLIC_HOST` to the bare hostname, such as
-`forms.your-domain.org`, without a protocol, port, path or trailing slash. This
-deployment supports the HTTPS root origin on port 443. Set a **different** value
-for each of `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `AUTH_SECRET`,
-`FINGERPRINT_SECRET`, `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY`, generating each
-with `openssl rand -hex 32`. The passwords must be hex to avoid URI escaping
-ambiguity. Generate `WEBHOOK_ENCRYPTION_KEY` with `openssl rand -base64 32`.
-Copy the resulting values into the file without printing it in logs.
+Edit `deploy/.env`:
 
-Create a [GitHub OAuth application](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app) with:
+- `PUBLIC_HOST`: the bare hostname, such as `forms.example.org`, without protocol,
+  port, path or trailing slash. The site is served at the root of
+  `https://<PUBLIC_HOST>` on port 443.
+- `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `AUTH_SECRET`, `FINGERPRINT_SECRET`,
+  `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY`: a different value for each,
+  generated with `openssl rand -hex 32`. Use hex values for the passwords so they
+  need no escaping in connection URLs.
+- `WEBHOOK_ENCRYPTION_KEY`: generate with `openssl rand -base64 32`.
 
-- Homepage: `https://<PUBLIC_HOST>`.
-- Callback: `https://<PUBLIC_HOST>/api/auth/callback/github`.
+Create a
+[GitHub OAuth application](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app)
+with the homepage `https://<PUBLIC_HOST>` and the callback
+`https://<PUBLIC_HOST>/api/auth/callback/github`, and set `AUTH_GITHUB_ID` and
+`AUTH_GITHUB_SECRET`. Google and GitLab sign-in are optional; see
+[sign-in methods](../docs/user-guide.md#sign-in-methods-and-account-linking).
 
-Set `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` to its real client ID and secret.
-GitHub is required; Google and GitLab are optional sign-in providers, configured with the credential pairs documented in the root README. Put the TLS certificate chain in
-`deploy/tls/fullchain.pem` and its private key in `deploy/tls/privkey.pem`.
-Protect these files and the Docker host. Environment values are visible to Docker
-administrators; `.env` is an installation secret store, not a multi-tenant vault.
+Put the certificate chain in `deploy/tls/fullchain.pem` and the private key in
+`deploy/tls/privkey.pem`.
 
-Back up this configuration securely. Keep `AUTH_SECRET`, `FINGERPRINT_SECRET`,
-`WEBHOOK_ENCRYPTION_KEY`, and both Inngest keys stable across restarts and upgrades.
-Do not regenerate them at startup. Changing the encryption key makes existing
-endpoint secrets unreadable; changing the fingerprint key changes rate identities.
-Updating PostgreSQL/Redis passwords also requires updating their existing stores,
-not just editing `.env` (PostgreSQL initialization only runs on an empty volume).
+Back up `deploy/.env` and the TLS files securely. Keep `AUTH_SECRET`,
+`FINGERPRINT_SECRET`, `WEBHOOK_ENCRYPTION_KEY` and both Inngest keys unchanged
+across restarts and upgrades:
 
-The build receives only `NEXT_PUBLIC_APP_URL=https://<PUBLIC_HOST>`, never these
-secrets. Next.js inlines public configuration at build time. Rebuild for a changed
-hostname; this is not a universal image that can be moved between hostnames.
-The startup wrapper enforces the same production guard as `next start` and rejects
-a runtime URL that differs from the baked URL.
+- changing `WEBHOOK_ENCRYPTION_KEY` makes stored webhook secrets unreadable;
+- changing `FINGERPRINT_SECRET` resets rate-limit identities and deletion markers;
+- changing a database or Redis password in `.env` does not change it in the
+  existing store, because PostgreSQL applies its password only when initializing
+  an empty volume.
 
-### Build, migrate, start
+Docker administrators can read these values; treat the host accordingly.
 
-Use this shell function from the extracted source root for the commands below:
+Only `NEXT_PUBLIC_APP_URL=https://<PUBLIC_HOST>` is passed to the image build;
+secrets are not. Because Next.js embeds the public URL at build time, rebuild after
+changing the hostname. The container refuses to start if its runtime URL differs
+from the URL it was built with.
+
+## 3. Build, migrate and start
+
+Run these commands from the source root. The `dc` function keeps the commands
+short:
 
 ```sh
 dc() { docker compose --env-file deploy/.env -f deploy/compose.yaml "$@"; }
@@ -142,31 +129,31 @@ dc up -d --wait
 dc ps
 ```
 
-`migrate` is an operations-profile service. It is not started by ordinary `up` and
-is not an application entrypoint. It runs the committed Drizzle migrations with
-the same locked toolchain. Only one operator should run it at a time. Reapplying
-it is safe; do not squash, edit, delete or reset migration history.
+`migrate` belongs to the `operations` profile, so `dc up` does not start it. It
+applies the committed migrations and can be run again safely, but only one
+operator should run it at a time. Never edit, squash or delete migration history.
 
-Normal stop/start preserves all three named volumes:
+To stop and start the stack while keeping all data:
 
 ```sh
 dc stop
 dc up -d --wait
 ```
 
-Do **not** use `down --volumes` on an installation whose data you want to retain.
-The application readiness check tests PostgreSQL connectivity, the exact latest
-committed migration hash and a rendered HTTP route. It does not prove pipeline
-health. Inngest's own healthcheck only proves its HTTP surfaces are responding.
+Do **not** run `dc down --volumes` on an installation whose data you want to
+keep.
 
-### Verify registration and the five-minute cron
+The application's health check confirms the database connection, that the latest
+migration is applied and that a page renders. It does not confirm background
+delivery; the next step does.
 
-Inngest polls the internal serve URL every 30 seconds. The app uses
-`INNGEST_DEV=0`, `INNGEST_BASE_URL=http://inngest:8288`, the matching event/signing
-keys, and `INNGEST_SERVE_ORIGIN=http://web:3000`. Incoming invocations retain the
-SDK's signature validation. No unauthenticated sync switch is enabled.
+## 4. Verify background jobs
 
-Inspect the private scheduler from the web container:
+The application registers its functions with the private Inngest service, which
+polls `http://web:3000/api/inngest` every 30 seconds. Requests between them are
+signed with the Inngest keys.
+
+List the registered functions and recent runs from inside the stack:
 
 ```sh
 dc exec -T web node --input-type=module <<'JS'
@@ -179,191 +166,194 @@ console.log(JSON.stringify(await response.json(), null, 2));
 JS
 ```
 
-Require `form-forge-process-submission`, `form-forge-process-webhook-delivery`,
-and `form-forge-drain-outbox`, with cron `*/5 * * * *`. Wait for an actual completed
-`drain-outbox` run. Registration and a healthy process alone are insufficient.
-Do not invoke internal recovery functions manually in an acceptance drill.
+Confirm that these functions are registered:
 
-Open `https://<PUBLIC_HOST>/login`, sign in through GitHub, publish a small form,
-configure your controlled HTTPS endpoint, and submit synthetic data. Verify a
-persisted delivery and HMAC over original request bytes at the receiver.
-Use the [installation verification procedure](acceptance/README.md) to finish the public
-networking and OAuth checks for your installation.
+- `form-forge-process-submission`
+- `form-forge-process-webhook-delivery`
+- `form-forge-drain-outbox`, with the cron trigger `*/5 * * * *`
+
+Wait until at least one `drain-outbox` run has completed; a registered function
+alone is not enough.
+
+Then open `https://<PUBLIC_HOST>/login`, sign in with GitHub, publish a small
+form, add a webhook endpoint you control, and submit test data. Check that the
+delivery succeeds and that your receiver can verify its signature. The
+[installation checklist](acceptance/README.md) covers TLS, OAuth, networking and
+recovery in more detail.
 
 ## Network boundary
 
-Only Nginx port 443 is published. There are no host ports for web, PostgreSQL,
-Redis, Inngest dashboard/API, metrics, or Connect. The application origin is
-accessible to containers on the private stack network and to Docker administrators.
-Do not attach untrusted containers or publish those origin ports.
+Only Nginx port 443 is published. PostgreSQL, Redis, the application port and the
+Inngest dashboard and API have no host ports and are reachable only from the
+private Compose network. Do not attach untrusted containers to that network or
+publish those ports.
 
-This Nginx directly faces clients and terminates TLS. It **replaces** incoming
-`X-Form-Forge-Client-IP` and `X-Forwarded-For` with `$remote_addr`; it does not append
-or trust client values. `TRUST_PROXY=1` is preserved. This deployment is not
-configured for a CDN or another proxy in front: that requires an explicit trusted
-address chain before public use. Do not blindly trust forwarded client headers.
+Nginx faces clients directly. It **replaces** the incoming
+`X-Form-Forge-Client-IP` and `X-Forwarded-For` headers with the connecting
+address, and the application runs with `TRUST_PROXY=1`. If you put a CDN or
+another proxy in front of Nginx, configure a trusted address chain first;
+otherwise every client appears to come from the proxy.
 
-Nginx allows 8,000,000-byte bodies, matching the submission limit. Body upload
-timeout is 15 seconds and upstream read/send timeout is 75 seconds. Webhook
-transport has its existing 10-second timeout; worker lease is 60 seconds. This
-does not impose a new application quota or modify target restrictions. The public
-ingress returns 404 for `/api/inngest` and `/api/internal/`; Inngest uses signed
-private calls. Authentication and workspace authorization are unchanged.
+Nginx accepts request bodies up to 8,000,000 bytes, matching the submission
+limit, with a 15-second body upload timeout and 75-second upstream timeouts. It
+returns 404 for `/api/inngest` and `/api/internal/`; Inngest reaches the
+application over the private network.
 
-Access scheduler diagnostics with `dc exec`, or a temporary administrator-only
-SSH tunnel and an explicitly loopback-bound port if you need its UI. No permanent
-admin port or anonymous public dashboard is part of this deployment. Backlog
-warnings only run while the scheduler is running, so also monitor missing cron
-runs, disk space and growing history. Error reporting is disabled in this reference
-configuration; the existing backlog warning remains in application logs.
+To open the Inngest dashboard, use `dc exec` or a temporary SSH tunnel to a port
+bound to loopback. Do not expose the dashboard publicly.
 
-The upstream uses Docker's internal DNS resolver and refreshes changed web
-container addresses. This supports container recreation during maintenance
-without retaining an obsolete origin IP; see the
-[Nginx upstream documentation](https://nginx.org/en/docs/http/ngx_http_upstream_module.html#resolve).
+Sentry is not configured in this stack; the delivery backlog warning appears in
+the application logs. Because that warning only runs while the scheduler is
+running, also monitor for missing cron runs, disk space and history growth.
 
 ## Upgrade and rollback
 
-Before accepting a new artifact, verify its checksum, release limitations and
-source provenance. Extract to a new release directory. Copy the existing `.env`
-and TLS material securely, without regenerating keys. Keep the same Compose
-project name so the same named volumes are used. Build the new `web` and `migrate`
-images for the same public hostname before the maintenance window.
+Before upgrading, read the release notes and verify the new release's checksums.
 
-1. Schedule downtime, stop ingress/writes and workers, and take the backup below.
-2. With PostgreSQL available and workers stopped, run the new `dc run --rm migrate`.
-3. Start Redis, application, scheduler and ingress with `dc up -d --wait`.
-4. Verify all three functions, an actual completed five-minute cron and a synthetic
-   delivery before resuming client traffic. `up --wait` alone is insufficient.
+1. Extract the new release into a new directory. Copy `deploy/.env` and
+   `deploy/tls/` securely, without regenerating any keys.
+2. Keep the same Compose project name so that the existing volumes are used.
+3. Build the new images for the same hostname: `dc build --no-cache web migrate`.
+4. Schedule downtime, stop the ingress, application and workers, and take a
+   [backup](#backup-and-isolated-restore).
+5. With PostgreSQL running and workers stopped, run `dc run --rm migrate`.
+6. Start everything with `dc up -d --wait`.
+7. Before resuming traffic, repeat the checks in
+   [Verify background jobs](#4-verify-background-jobs), including a completed cron
+   run and a test delivery. `up --wait` alone does not confirm this.
 
-For a same-release recreation drill, `dc stop; dc up -d --force-recreate --wait`
-must retain existing data and keys. The automated fixture checks worker restarts,
-storage restarts and application recreation during restore; the entire maintenance
-upgrade sequence remains an owner-run check. A future-version upgrade cannot be
-certified before its schema and release exist. Roll application code back only when it is compatible with the
-already applied migrations and scheduler configuration. There are no destructive
-down migrations. Otherwise restore a complete backup into a new destination;
-do not drop tables or delete history to force a rollback.
+Roll application code back only to a version that is compatible with the applied
+migrations. There are no down migrations; otherwise restore a complete backup into
+a new installation. Never drop tables or delete migration history to force a
+rollback.
 
 ## Backup and isolated restore
 
-Backups cover **three stores plus installation keys**. An application `pg_dump`
-alone does not capture scheduler queue, run state, configuration or history.
-For a controlled maintenance snapshot, with no other database writers:
+A complete backup contains **three stores and the installation keys**: the
+PostgreSQL database, the Inngest SQLite directory, the Redis data directory, and
+the configuration. A `pg_dump` alone does not include the scheduler's queue, runs,
+configuration or history.
+
+### Create a backup
+
+Run the backup during a maintenance window, with no other database writers:
 
 ```sh
-sh deploy/backup.sh /absolute/new/form-forge-backup
+sh deploy/backup.sh /absolute/path/to/new/form-forge-backup
 ```
 
-The script stops ingress, web, Inngest and Redis, verifies they are stopped, and creates a PostgreSQL custom dump,
-archives the entire stopped SQLite directory (including WAL files) and entire
-Redis data directory (including multipart AOF), and copies the installation
-environment, release provenance, Compose files, Nginx template and TLS files. Every copied file is covered by the checksum manifest. An `INCOMPLETE` marker remains until dump/archive validation and checksum verification finish; a failed backup must not be restored. The destination must be outside the project directory, including when reached
-through a symlink. The script refuses to overwrite a directory and leaves
-services stopped for inspection. For an installation with a custom project or
-Compose overlay, pass the same standard Compose selectors to the script, for example
-`COMPOSE_PROJECT_NAME=my-installation COMPOSE_FILE=deploy/compose.yaml:deploy/local.yaml sh deploy/backup.sh /absolute/new/backup`.
-The files must live inside the installation; preserve the backed-up overlays and
-review installation-specific addresses and mounts for the destination. Encrypt the entire backup at rest and
-move it to restricted storage. Dumps and scheduler history can contain personal
-data; never attach them to evidence or release artifacts. Resume with `dc up -d --wait`, then repeat registration/cron checks.
+The script:
 
-Rehearse restore on a separate Docker project, never over the source. Extract the
-**same** source release to a new directory, securely copy `installation.env` to
-`deploy/.env` and backup TLS to `deploy/tls`. Bind `HTTPS_BIND=127.0.0.1` and set an
-unused `HTTPS_PORT` (for example 19443) so it cannot accept public traffic. Use a
-separate function. From the new source root, verify the **entire** backup before
-creating a destination. The strengthened checksum/provenance set is produced by
-this revised script; original rc.1 backups omit these metadata and TLS coverage
-and cannot pass this stricter verification unchanged. `backup_manifest.py verify` refuses an incomplete set,
-uncovered/missing files, checksum mismatches and unsafe scheduler archives.
-`shasum` alone cannot establish that required files were not omitted.
+1. stops Nginx, the application, Inngest and Redis, and verifies that they are
+   stopped;
+2. creates a PostgreSQL custom-format dump;
+3. archives the whole SQLite directory, including WAL files, and the whole Redis
+   data directory, including multipart AOF files;
+4. copies the installation environment, release provenance, Compose files, Nginx
+   template and TLS files;
+5. writes a checksum manifest covering every file.
 
-```sh
-python3 deploy/backup_manifest.py verify /backup
-(cd /backup && shasum -a 256 -c SHA256SUMS)
-restore_dc() { docker compose --env-file deploy/.env -p form-forge-restore -f deploy/compose.yaml "$@"; }
-restore_dc config --quiet
-restore_dc up -d --wait postgres
-restore_dc exec -T postgres pg_restore -U form_forge -d form_forge --no-owner --exit-on-error < /backup/application.dump
-restore_dc run --rm --no-deps -T --entrypoint sh inngest -c 'cd /var/lib/inngest && tar -xzf -' < /backup/scheduler-history.tar.gz
-restore_dc run --rm --no-deps -T --entrypoint sh redis -c 'cd /data && tar -xzf -' < /backup/scheduler-queue.tar.gz
-```
+The destination must be a new directory outside the source tree, including
+through symlinks. An `INCOMPLETE` marker stays in the backup until all files are
+validated; never restore a backup that still has it. The script leaves services
+stopped; resume with `dc up -d --wait` and repeat the
+[background job checks](#4-verify-background-jobs).
 
-These commands require all three destination volumes to be new and empty and all
-writers to be stopped. Refuse a pre-existing project/volume; inspect the resolved
-Compose configuration and container mounts to rule out source volume names, bind
-mounts, external application/scheduler stores and source service addresses. Stop
-the source after backup but retain it until the drill finishes. The disposable
-runner verifies this isolation; it shares only the controlled receiver network.
-The keys come from `installation.env`; keep `VERSION`, `SOURCE.json`, `BACKUP.json`,
-`compose.yaml`, `nginx.conf.template` and `configuration/` with the backup. Match
-its source hashes/version with the original source release. For custom overlays,
-copy the recorded `configuration/` files and adjust only destination project,
-paths and local ingress binding. No migration or fixture SQL repairs scheduler
-registration during a same-release restore. Match container ownership and image
-versions; do not import a live Redis directory or only SQLite's `main.db` while
-its writers are running. Build for the preserved hostname and use local DNS
-resolution to reach the loopback HTTPS port. Before workers start, compare published schema IDs/hashes, individual submission
-and endpoint identities, outbox states/due times, logical delivery IDs/retry budgets
-and attempt history, and verify every endpoint secret decrypts with the preserved
-key. A one-off verification process may read the restored database without starting
-workers. Refuse decryption failure before allowing delivery processing. Inspect the
-restored scheduler directories/history before starting Inngest; application outbox
-recovery is not evidence that scheduler archives were restored.
+If your installation uses a custom project name or additional Compose files, pass
+the same standard Compose variables to the script, for example
+`COMPOSE_PROJECT_NAME=my-installation COMPOSE_FILE=deploy/compose.yaml:deploy/local.yaml sh deploy/backup.sh /absolute/path/to/backup`.
+The extra files must be inside the installation directory and are included in the
+backup.
 
-Then run `restore_dc up -d --wait`, verify the same registered function identities,
-new completed five-minute cron runs, and real HTTPS delivery under restored logical IDs.
-A due retry may already be overdue: application cron dispatches the stored outbox
-and repairs due deliveries, rather than preserving a future Inngest sleep for each
-application retry.
-Do not resume a restore against real receiver endpoints without an agreed
-redelivery window; use an owner-controlled isolated receiver for drills.
+Backups contain secrets and personal data. Encrypt the whole backup at rest and
+move it to restricted storage.
 
-The automated test runs this complete cold restore using `deploy/backup.sh` in a
-disposable installation and a second Compose project. One snapshot contains pending
-outbox, a persisted 503 with pending retry, and completed delivery history. It checks
-new empty stores, full restored scheduler-directory file hashes, SQLite identities
-and history, surviving Redis values before workers, application invariants and
-secret decryption. Corrupted archive and wrong-key copies must fail before workers.
-It then requires real cron recovery and raw-byte HTTPS HMAC validation and observes
-completed logical work across two additional completed recovery ticks. This finite
-observation is not a guarantee of no HTTP replay forever.
+### Restore into a separate installation
 
-Application outbox recovery also repairs incomplete processing: pending/failed
-events retry; sent submissions without deliveries can be requeued after five
-minutes; expired 60-second worker leases are recovered by the five-minute cron. Outbox
-dispatch backs off from one minute to one hour and sends up to 50 events per cron
-run. Delivery retry delays are 1 minute, 5 minutes, 30 minutes and 2 hours, within
-five initial attempts. Recovery may take several ticks and is not instantaneous.
-Using fresh scheduler state can lose history and schedules; it is not equivalent
-to restoring a matching snapshot. Do not clear scheduler volumes as a recovery
-shortcut or promise a recovery point without measuring it.
+Rehearse restores in a separate Compose project, never over the source
+installation. Backups made with 0.1.0-rc.1 lack the metadata that the
+verification step requires.
 
-Delivery is at-least-once. A restore or lost acknowledgement can repeat HTTP
-delivery under the same logical `X-Form-Forge-Id`. Receivers must durably deduplicate
-that ID before performing side effects. Restoring an old backup may repeat work
-accepted after that backup. No exactly-once network delivery or point-in-time
-guarantee is claimed.
+1. Extract the **same** release into a new directory. Copy
+   `installation.env` from the backup to `deploy/.env` and the backup's TLS files to
+   `deploy/tls/`.
+2. In `deploy/.env`, set `HTTPS_BIND=127.0.0.1` and an unused `HTTPS_PORT`, such as
+   `19443`, so the copy cannot receive public traffic.
+3. Verify the whole backup before creating anything:
 
-## Repeat the automated acceptance
+   ```sh
+   python3 deploy/backup_manifest.py verify /backup
+   (cd /backup && shasum -a 256 -c SHA256SUMS)
+   ```
 
-On a disposable Docker host with Python 3.9 or newer, OpenSSL and curl:
+   `backup_manifest.py verify` rejects incomplete backups, missing or uncovered
+   files, checksum mismatches and unsafe archive contents. `shasum` alone cannot
+   detect a missing file.
+
+4. Restore the three stores into new, empty volumes of a separate project:
+
+   ```sh
+   restore_dc() { docker compose --env-file deploy/.env -p form-forge-restore -f deploy/compose.yaml "$@"; }
+   restore_dc config --quiet
+   restore_dc up -d --wait postgres
+   restore_dc exec -T postgres pg_restore -U form_forge -d form_forge --no-owner --exit-on-error < /backup/application.dump
+   restore_dc run --rm --no-deps -T --entrypoint sh inngest -c 'cd /var/lib/inngest && tar -xzf -' < /backup/scheduler-history.tar.gz
+   restore_dc run --rm --no-deps -T --entrypoint sh redis -c 'cd /data && tar -xzf -' < /backup/scheduler-queue.tar.gz
+   ```
+
+5. Before starting workers, check the restored data: published schemas, response
+   and endpoint counts, pending outbox events and deliveries, and that every
+   webhook endpoint secret decrypts with the restored key. Stop if any secret fails
+   to decrypt.
+6. Build for the original hostname, resolve it locally to the loopback port, and
+   start the stack with `restore_dc up -d --wait`. Confirm the registered
+   functions, new completed cron runs and a real HTTPS delivery.
+
+Keep the source installation stopped but intact until the rehearsal is finished.
+Check that the restore project uses only its own volumes, mounts and service
+addresses. Never copy a Redis directory or SQLite database while their writers are
+running. With custom Compose files, use the copies stored in the backup's
+`configuration/` directory and change only the project name, paths and local
+port binding.
+
+Use a test receiver for restore drills. A restore can resend deliveries that were
+already sent, and retries that were due during the outage are sent by the next
+recovery run.
+
+### Recovery behavior
+
+The recovery job, which runs every five minutes, repairs interrupted work:
+
+- pending and failed outbox events are retried, backing off from one minute to one
+  hour, up to 50 events per run;
+- responses whose deliveries were never created are requeued after five minutes;
+- deliveries whose 60-second worker lease expired are picked up again.
+
+Webhook retries are spaced 1 minute, 5 minutes, 30 minutes and 2 hours apart,
+within five attempts. Recovery can take several runs. Starting with empty
+scheduler volumes loses scheduler history and is not equivalent to restoring a
+backup; do not clear them as a shortcut.
+
+Delivery is at least once. A restore or a lost acknowledgement can repeat a
+delivery with the same `X-Form-Forge-Id`, and restoring an older backup can repeat
+work accepted after it was taken. Receivers must store that ID and skip
+duplicates before performing side effects.
+
+## Automated acceptance test
+
+To test the whole stack on a disposable Docker host with Python 3.9 or newer,
+OpenSSL and curl:
 
 ```sh
 python3 deploy/acceptance/run.py --cold-restore-only --output deploy/evidence/local.json
 ```
 
-The runner creates a random project and new volumes, builds from locked source,
-generates temporary credentials/certificates, migrates an empty database, exercises
-real signed Inngest calls and real HTTPS transport, and cleans only its resources
-in `finally`. Loopback ports 18443 and 19443 and the fixture subnet must be free. Fixture identities,
-schemas and endpoints are inserted directly into the disposable database; this is
-not a live OAuth test. No production authentication bypass is introduced.
+The test builds the images, creates a separate Compose project with temporary
+keys and certificates, and exercises real Inngest and HTTPS delivery, a backup and
+a restore into a second project. It removes only the resources it created.
+Loopback ports 18443 and 19443 and the test subnet must be free.
 
-The receiver address `192.0.3.10` exists only on an `internal: true` Docker network
-with no external route. A `.invalid` host is mapped inside the web fixture, and a
-temporary CA is trusted only by the test container. No request reaches that public
-IP's real-world owner or a third-party webhook service. The production transport
-and target policy are unchanged. This proves controlled HTTPS transport, not
-public DNS, public CA issuance or installation-owner networking.
+The test receiver runs on an isolated internal Docker network, so no requests
+leave the host. The test inserts its users and forms directly into its own
+database; it does not test GitHub sign-in, public DNS or certificate issuance.
+See [Deployment verification](VERIFICATION.md) for the full list of checks.

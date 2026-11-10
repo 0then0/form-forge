@@ -1,56 +1,58 @@
 # Deploy to Netlify with Neon and Inngest Cloud
 
-Netlify runs Next.js through its automatically installed OpenNext adapter. Neon
-stores PostgreSQL data, GitHub OAuth provides sign-in, and Inngest Cloud runs
-background delivery and recovery. The Docker Compose stack is not used here.
+In this setup, Netlify runs the Next.js application through its automatically
+installed OpenNext adapter, [Neon](https://neon.com/) hosts PostgreSQL, GitHub
+OAuth provides sign-in, and [Inngest Cloud](https://www.inngest.com/) runs
+background delivery and recovery. The Docker Compose stack is not used.
+
+Steps:
+
+1. [Create and migrate the Neon database](#1-create-and-migrate-the-neon-database)
+2. [Import the repository into Netlify](#2-import-the-repository-into-netlify)
+3. [Set production environment variables](#3-set-production-environment-variables)
+4. [Configure GitHub OAuth](#4-configure-github-oauth)
+5. [Deploy and sync Inngest](#5-deploy-and-sync-inngest)
 
 ## 1. Create and migrate the Neon database
 
-Create a Neon project and database close to your Netlify Functions region. Copy
-both connection strings from **Connect**, preserving their SSL parameters:
+Create a Neon project and database in a region close to your Netlify Functions
+region. From **Connect**, copy both connection strings, keeping their SSL
+parameters:
 
-- **Pooled**, with `-pooler` in the hostname: application `DATABASE_URL`.
-- **Direct**, without `-pooler`: migration commands.
+- **Pooled** (hostname contains `-pooler`): the application's `DATABASE_URL`.
+- **Direct** (no `-pooler`): for running migrations.
 
-The existing `pg` and Drizzle client supports Neon without an additional driver.
-Use **`sslmode=verify-full`** in the migration URL and preserve other Neon
-parameters, including `channel_binding=require` when present. This explicitly
-keeps certificate and hostname verification and avoids the `pg` warning about
-the future meaning of `sslmode=require`. Do not disable TLS verification to fix
-connection timeouts.
+In the migration URL, use `sslmode=verify-full` and keep other parameters, such as
+`channel_binding=require`. This keeps certificate and hostname verification and
+avoids the `pg` driver's warning about `sslmode=require`. Never disable TLS
+verification to work around connection problems.
 
-### Manual GitHub Actions run (recommended for Neon)
+You can run migrations from GitHub Actions or from your computer.
+
+### Option A: GitHub Actions (recommended)
 
 1. In GitHub, open **Settings → Secrets and variables → Actions → New repository
-   secret**. Name it **`NEON_MIGRATION_DATABASE_URL`** and store the **direct**
-   connection URL, with `sslmode=verify-full`. Netlify's pooled URL remains separate.
-2. Ensure the desired migrations are committed on `main` and its CI checks pass.
-   Back up the database, stop application writes and pause workers before upgrading
-   an existing installation. See [upgrade precautions](../docs/operations.md).
-3. Open **Actions → Database migrations → Run workflow**, select **main**, and run
-   it. The workflow applies all pending committed migrations from that commit,
-   including `0006` if only `0000`–`0005` are recorded. It does not generate SQL or
-   apply only one arbitrarily selected migration.
-4. Confirm **Apply committed migrations** succeeds before deploying the matching
-   application version and resuming writes and workers.
+   secret**. Create **`NEON_MIGRATION_DATABASE_URL`** with the **direct** connection
+   URL, using `sslmode=verify-full`.
+2. Make sure the migrations you want are committed on `main` and CI passes. When
+   upgrading an existing installation, back up the database and stop writes and
+   workers first; see [Upgrades](../docs/operations.md#upgrades).
+3. Open **Actions → Database migrations → Run workflow**, select `main` and run it.
+   The workflow applies every committed migration that is not yet recorded in the
+   database.
+4. Confirm that **Apply committed migrations** succeeded before deploying the
+   matching application version.
 
-The [workflow](../.github/workflows/migrate.yml) runs only on manual dispatch from
-`main`, never on push, PR, release, Netlify build or function startup. Concurrent
-workflow runs are serialized. Do not run local migrations at the same time. The
-database secret is supplied only to the migration step, after dependencies are
-installed with a frozen lockfile and lifecycle scripts disabled. That step runs
-Node directly, avoiding pnpm's automatic dependency installation before scripts.
-GitHub runners
-must have network access to Neon; IP restrictions must allow that path.
+The [workflow](../.github/workflows/migrate.yml) runs only when started manually
+from `main`, never on push, pull requests, releases, Netlify builds or function
+start. Runs are serialized; do not run local migrations at the same time. The
+database secret is available only to the migration step, after dependencies are
+installed from the lockfile with lifecycle scripts disabled. If your Neon project
+restricts IP addresses, allow GitHub-hosted runners.
 
-This bypasses a failing local network path. A local `read ETIMEDOUT` is not an SQL
-migration failure merely because small queries work. The SSL warning and transport
-timeout are separate issues; changing `sslmode` does not repair the network path.
+### Option B: from your computer
 
-### Local alternative
-
-From the repository root, with the required Node.js/pnpm versions and dependencies
-installed:
+From the repository root, with Node.js, pnpm and dependencies installed:
 
 ```sh
 export DATABASE_URL='postgresql://USER:PASSWORD@DIRECT_HOST/DB?sslmode=verify-full&channel_binding=require'
@@ -58,98 +60,94 @@ pnpm db:migrate
 unset DATABASE_URL
 ```
 
-The migration runner reads the exported `DATABASE_URL`, not Next.js env files or variables
-named `DIRECT_URL` or `DATABASE_URL_UNPOOLED`. Pass the direct connection as
-`DATABASE_URL` for this command. Keep migrations out of build commands and function
-startup to avoid concurrent migration runs and accidental production changes from
-Deploy Previews. For later updates, follow the [maintenance precautions](../docs/operations.md).
-Preserve installation keys and transfer existing data before enabling
-writes and workers when moving an existing installation.
+The migration command reads `DATABASE_URL` from the shell, not from Next.js
+environment files or variables such as `DIRECT_URL`. Pass the direct connection
+here. Do not run migrations in the build command or at function start, which can
+cause concurrent runs and apply production changes from Deploy Previews.
 
-The runner uses the existing Drizzle migration files and `drizzle.__drizzle_migrations`
-history, including installations initialized through Neon SQL Editor with the
-original hashes and timestamps. No history reset, manual recreation of `0006`, or
-new migration is needed. Connection attempts are limited to 15 seconds, lock waits
-to 15 seconds and each SQL statement to five minutes. For a deliberately longer
-maintenance operation, set `MIGRATION_STATEMENT_TIMEOUT_MS` explicitly; the manual
-workflow also has a 15-minute overall limit. Errors close the connection and return
-a nonzero exit status without printing SQL, answer values or credentials. There
-are no automatic retries. After a dropped connection, inspect migration history
-and database state before rerunning: losing the `COMMIT` acknowledgement makes
-the result uncertain. Do not insert history rows by hand to suppress an error.
+### Migration behavior
+
+Migrations use the committed Drizzle files and the
+`drizzle.__drizzle_migrations` history table. The command limits connection
+attempts and lock waits to 15 seconds each and every statement to five minutes;
+set `MIGRATION_STATEMENT_TIMEOUT_MS` for a longer planned operation. The GitHub
+workflow has a 15-minute overall limit.
+
+On error, the command closes the connection and exits with a nonzero status
+without printing SQL, answers or credentials. It does not retry. If the
+connection drops, the result can be uncertain, because the `COMMIT`
+acknowledgement may have been lost: check the migration history and database
+state before running it again. Never insert history rows by hand to hide an error.
 
 See [Neon's Drizzle guide](https://neon.com/docs/guides/drizzle).
 
-## 2. Import the Git repository into Netlify
+## 2. Import the repository into Netlify
 
-Use these build settings:
+Import the Git repository and use these build settings:
 
 - Base directory: repository root (`.`).
 - Package directory: `apps/web`, set in the Netlify UI.
 - Build command: `pnpm exec turbo run build --filter=@form-forge/web...`.
-- Publish directory: `apps/web/.next`, relative to the base directory.
+- Publish directory: `apps/web/.next`.
 
-The root `netlify.toml` supplies the base, build command, publish path, Node.js
-24.22.0, and frozen pnpm install flags. The `packageManager` field pins pnpm
-12.17.0 through Corepack. Hoisting is enabled only for the Netlify install, as
-recommended by Netlify for pnpm/Next.js. Do not set `NODE_ENV=production` during
-dependency installation: the build needs development dependencies.
+[`netlify.toml`](../netlify.toml) sets the base directory, build command, publish
+directory, Node.js 24.22.0 and frozen pnpm install flags. The `packageManager`
+field pins pnpm 12.17.0 through Corepack. Dependency hoisting is enabled only for
+the Netlify install, as Netlify recommends for pnpm with Next.js. Do not set
+`NODE_ENV=production` for the install, because the build needs development
+dependencies.
 
-Keep the automatic Next.js/OpenNext adapter enabled. No manually installed
-framework plugin, Dockerfile, static export, SPA catch-all redirect, or
-`pnpm start` command is needed. Do not override the Node.js Functions runtime to
-an older version. Choose a Functions region close to Neon in Netlify settings.
+Keep Netlify's automatic Next.js adapter enabled. You do not need a framework
+plugin, Dockerfile, static export, SPA redirect or `pnpm start` command. Do not
+pin the Functions runtime to an older Node.js version. Choose a Functions region
+close to your Neon database.
 
 See [Next.js on Netlify](https://docs.netlify.com/build/frameworks/framework-setup-guides/nextjs/overview/),
-[monorepos](https://docs.netlify.com/build/configure-builds/monorepos/), and
+[monorepos](https://docs.netlify.com/build/configure-builds/monorepos/) and
 [dependency management](https://docs.netlify.com/build/configure-builds/manage-dependencies/).
 
-### Manual production deploys
+### Production deploys
 
-The repository's `ignore = "exit 0"` skips Git-triggered builds, including push
-and PR builds. Keep **Active builds** enabled in Netlify; **Stopped builds** also
-disables build hooks. Build hook requests bypass the ignore command.
+`netlify.toml` sets `ignore = "exit 0"`, so pushes and pull requests do not
+trigger builds. Deploys are started manually through a build hook, which bypasses
+the ignore command. Keep **Active builds** enabled in Netlify: **Stopped builds**
+also disables build hooks.
 
 One-time setup:
 
 1. In Netlify, open **Project configuration → Developer settings → Continuous
    deployment → Build hooks → Add build hook**. Name it `Manual production`,
-   choose `main`, and save.
-2. Copy the resulting URL without adding query parameters. In GitHub repository
-   **Settings → Secrets and variables → Actions → New repository secret**, save
-   it as **`NETLIFY_BUILD_HOOK`**. Do not commit or share the URL.
+   choose `main` and save.
+2. Copy the URL without adding query parameters. In GitHub, open **Settings →
+   Secrets and variables → Actions → New repository secret** and save it as
+   **`NETLIFY_BUILD_HOOK`**. Do not commit or share this URL.
 
-To deploy, push the desired code to `main`, then open **GitHub Actions → Deploy
-production → Run workflow**, select `main`, and run it. The workflow sends a
-single request to Netlify for the latest remote `main` at build time. It does not
-pin the workflow's SHA: avoid pushing more changes while the deploy is starting
-if you need to deploy a particular revision. Dispatches from other branches are
-skipped. No checkout, dependency installation, migration, or GitHub token
-permissions are needed for this workflow.
+To deploy, push to `main`, then open **Actions → Deploy production → Run
+workflow**, select `main` and run it. Netlify builds the latest `main` at the time
+the build starts, not a fixed commit, so avoid pushing while a deploy you care
+about is starting. Runs from other branches are skipped. The workflow does not
+check out code, install dependencies or run migrations.
 
-A green workflow means Netlify accepted the request, not that deployment
-succeeded. Check **Netlify → Deploys** for the build, deployed SHA and publication
-status. Requests are not automatically retried to avoid duplicate builds; inspect
-Deploys before rerunning after a network error. Workflow concurrency serializes
-trigger requests only, not the entire Netlify build. Keep automatic publishing
-enabled if successful manual builds should immediately update production.
+A successful workflow run means that Netlify accepted the request, not that the
+deploy succeeded. Check **Netlify → Deploys** for the build result and deployed
+commit. Requests are not retried automatically, to avoid duplicate builds; check
+Deploys before running the workflow again after a network error. Keep automatic
+publishing enabled if successful builds should go live immediately.
 
-Database migrations remain a separate manual workflow and are not run by this
-deploy trigger. Resync Inngest after changing function definitions, as described
-below. The old Active/Stopped toggle sequence is no longer needed. Use this
-workflow for routine deploys rather than relying on the Netlify UI to bypass the
-ignore rule.
+Migrations are a separate workflow and are not run by deploys. After changing
+background function definitions, [sync Inngest](#5-deploy-and-sync-inngest)
+again.
 
 See [ignore commands](https://docs.netlify.com/build/configure-builds/ignore-builds/)
 and [build hooks](https://docs.netlify.com/build/configure-builds/build-hooks/).
 
-## 3. Set the Production environment
+## 3. Set production environment variables
 
 Choose a permanent public URL, such as `https://PROJECT.netlify.app` or a custom
-domain. In Netlify's environment-variable settings, supply real values using
-`apps/web/.env.production.example` as the checklist. Make application variables
-available to **both Builds and Functions** (or all scopes), with values specific
-to the Production deploy context:
+domain. In Netlify's environment variable settings, add real values, using
+[`apps/web/.env.production.example`](../apps/web/.env.production.example) as a
+checklist. Make them available to **both Builds and Functions**, with values for
+the Production deploy context:
 
 ```dotenv
 DATABASE_URL=<Neon pooled connection string>
@@ -168,92 +166,90 @@ INNGEST_SIGNING_KEY=<Inngest production signing key>
 INNGEST_SERVE_ORIGIN=https://forms.example.org
 ```
 
-Replace every example origin with the same permanent URL. Generate each of
-`AUTH_SECRET`, `FINGERPRINT_SECRET`, and `WEBHOOK_ENCRYPTION_KEY` separately:
+Replace every example URL with your permanent URL. Generate `AUTH_SECRET`,
+`FINGERPRINT_SECRET` and `WEBHOOK_ENCRYPTION_KEY` separately:
 
 ```sh
 openssl rand -base64 32
 ```
 
-Keep keys stable across deploys and securely backed up. Changing the encryption
-key makes existing webhook secrets unreadable. Sentry DSNs are optional. Leave
-`INNGEST_BASE_URL` unset for Inngest Cloud. Do not set `TEST_DATABASE_URL` or
-`E2E_PIPELINE_TOKEN` in deployed environments.
+Keep these keys unchanged across deploys and back them up; changing the
+encryption key makes stored webhook secrets unreadable. Sentry DSNs are optional.
+Leave `INNGEST_BASE_URL` unset for Inngest Cloud. Never set `TEST_DATABASE_URL`
+or `E2E_PIPELINE_TOKEN` in a deployed environment.
 
-Do not put secrets in `netlify.toml`: variables declared there are build-only,
-not available to Functions. After changing environment values, deploy again.
-`NEXT_PUBLIC_APP_URL` is embedded in the browser bundle during compilation.
+Do not put secrets in `netlify.toml`: variables set there are available to builds
+only, not to Functions. Redeploy after changing environment variables;
+`NEXT_PUBLIC_APP_URL` is embedded in the browser bundle at build time.
 
-Netlify provides the reserved `SITE_ID` in both builds and Functions. The app uses
-it to select the platform trust boundary and enforce production configuration
-without `next start`. Turborepo forwards it and includes it in the cache key.
-Do not set `SITE_ID` on a self-hosted installation. The build-only `NETLIFY`
-variable is not used to detect the Functions runtime.
+Netlify sets the reserved `SITE_ID` variable in builds and Functions. Form Forge
+uses it to apply Netlify's client IP handling and to enforce the production
+configuration checks, since Netlify does not run `next start`. Never set
+`SITE_ID` on a self-hosted installation.
 
-Production on Netlify reads only `x-nf-client-connection-ip` with `TRUST_PROXY=1`.
-It ignores client-supplied `X-Form-Forge-Client-IP` and `X-Forwarded-For`.
-Self-hosted production continues to require the dedicated ingress header.
+On Netlify, with `TRUST_PROXY=1`, the client IP address comes only from the
+`x-nf-client-connection-ip` header; client-supplied `X-Form-Forge-Client-IP` and
+`X-Forwarded-For` are ignored.
 
-See [Functions environment variables](https://docs.netlify.com/build/functions/environment-variables/)
-and [Netlify's client IP header guidance](https://answers.netlify.com/t/is-the-client-ip-header-going-to-be-supported-long-term/11203).
+See [Functions environment variables](https://docs.netlify.com/build/functions/environment-variables/).
 
 ## 4. Configure GitHub OAuth
 
-Create a production GitHub OAuth app using your permanent public hostname:
+Create a GitHub OAuth app for your permanent hostname:
 
-- Homepage: `https://forms.example.org`.
-- Callback: `https://forms.example.org/api/auth/callback/github`.
+- Homepage: `https://forms.example.org`
+- Callback: `https://forms.example.org/api/auth/callback/github`
 
-Enter its client ID and secret in the Netlify environment settings.
+Add its client ID and secret to the Netlify environment variables.
 
 ## 5. Deploy and sync Inngest
 
-Deploy once database migrations and environment values are ready. In the Inngest
-production dashboard, select **Apps > Sync new app** and enter
-`https://forms.example.org/api/inngest`. Ensure site/password protection does not
-block Inngest requests. Inngest verifies requests using `INNGEST_SIGNING_KEY`.
-Keep the same origin in `INNGEST_SERVE_ORIGIN`.
+Deploy once the database is migrated and the environment variables are set. In
+the Inngest production dashboard, select **Apps → Sync new app** and enter
+`https://forms.example.org/api/inngest`. Make sure site or password protection
+does not block Inngest. Inngest signs its requests with `INNGEST_SIGNING_KEY`;
+keep the same origin in `INNGEST_SERVE_ORIGIN`.
 
-After deploying changes to function definitions, sync the app again. Automatic
-sync is not configured: the optional `netlify-plugin-inngest` is not required and
-is not installed. This keeps deployment free of extra build dependencies.
-The existing `/api/inngest` Node.js route serves the functions; no separate
-Netlify function endpoint or Netlify Scheduled Function is needed.
+Sync the app again after deploying changes to background functions; automatic sync
+is not configured. The `/api/inngest` route serves all functions, so no separate
+Netlify Function or Scheduled Function is needed.
 
-Confirm three functions are registered and observe an actual completed minute
-cron run:
+Confirm that three functions are registered and wait for a completed run of the
+five-minute cron job:
 
-- `process-submission`.
-- `process-webhook-delivery`.
-- `drain-outbox` (`*/5 * * * *`).
+- `process-submission`
+- `process-webhook-delivery`
+- `drain-outbox` (`*/5 * * * *`)
 
-Sign in through GitHub, publish a form, submit a response, and inspect Submissions.
-Configure an owner-controlled public HTTPS webhook, submit again, and verify a
-successful delivery attempt and the corresponding Inngest runs. A successful
-build or stored response alone does not verify background delivery.
+Then sign in with GitHub, publish a form and submit a response. Add a webhook
+endpoint you control, submit again, and check for a successful delivery attempt
+and the matching Inngest runs. A successful build or stored response does not
+confirm that background delivery works.
 
 See [Inngest app sync](https://www.inngest.com/docs/platform-and-operations/apps-and-syncs)
-and [Netlify deployment options](https://www.inngest.com/docs/durable-execution/deploying-functions/platforms/netlify).
+and [deploying to Netlify](https://www.inngest.com/docs/durable-execution/deploying-functions/platforms/netlify).
 
-## Preview isolation, limits, and backups
+## Preview deploys
 
-Deploy Previews and branch deploys need isolated configuration: a separate Neon
-branch/database, matching application URLs, separate GitHub OAuth credentials,
-and an isolated Inngest environment. Explicitly migrate that database. Never let
-previews inherit production database credentials or sync them into production
-Inngest. A stable staging hostname is easier for OAuth than changing preview URLs.
-Automatic per-preview database/environment provisioning is not configured here;
-previews without valid configuration intentionally fail the build.
+Deploy Previews and branch deploys need their own configuration: a separate Neon
+branch or database, matching application URLs, separate GitHub OAuth credentials
+and a separate Inngest environment. Migrate that database explicitly. Never give
+previews production database credentials or sync them into production Inngest. A
+stable staging hostname is easier to use with OAuth than changing preview URLs.
+The repository does not provision preview resources automatically, so a preview
+without valid configuration fails to build.
+
+## Limits and backups
 
 Netlify synchronous Functions have a 60-second execution limit and a 6 MB
-buffered request/response limit; binary encoding can reduce the effective request
-limit to about 4.5 MB. These are below the app's existing 8,000,000-byte submission
-and 16,000,000-byte schema limits. Oversized requests can be rejected by Netlify
-before app validation. The self-hosted payload allowance is not preserved here.
-The Next.js route's `maxDuration` setting does not configure Netlify limits.
-See [Functions configuration](https://docs.netlify.com/build/functions/configuration/).
+request and response limit; binary encoding can reduce the usable request size to
+about 4.5 MB. Both are below Form Forge's own limits of 8,000,000 bytes per
+submission and 16,000,000 bytes per schema, so Netlify can reject large requests
+before the application sees them. A route's `maxDuration` setting does not change
+Netlify's limits. See
+[Functions configuration](https://docs.netlify.com/build/functions/configuration/).
 
-Use Neon backups/restore for application data and retain installation keys.
-Inngest Cloud manages scheduler state/history. Docker Compose backup scripts do
-not apply to these managed services. Delivery remains at-least-once; receivers
-must deduplicate `X-Form-Forge-Id`.
+Use Neon's backup and restore features for application data, and keep copies of
+your installation keys. Inngest Cloud manages scheduler state. The Docker Compose
+backup scripts do not apply to this setup. Delivery is at least once, so
+receivers must deduplicate by `X-Form-Forge-Id`.
