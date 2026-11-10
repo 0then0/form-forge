@@ -21,7 +21,7 @@ installation's public hostname. See [release notes](RELEASE_NOTES.md) for the su
   installed with pnpm 12.10.1 and `--frozen-lockfile`.
 
 Runtime images are pinned by tag **and digest** in Compose/Dockerfile: Node
-24.21.0 (Debian bookworm slim), PostgreSQL 16.14, Redis 7.4.8, Inngest 1.46.0,
+24.22.0 (Debian bookworm slim), PostgreSQL 16.14, Redis 7.4.8, Inngest 1.46.0,
 Nginx 1.30.5. Next.js 16.4.0 and Inngest SDK 4.23.0 come from the existing lockfile.
 No additional dependency is required.
 
