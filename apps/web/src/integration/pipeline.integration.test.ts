@@ -1167,7 +1167,7 @@ integration("submission and delivery pipeline", () => {
       workspaceId: workspace.id,
     });
     if (!seeded.version) throw new Error("Expected a published version");
-    let pendingSubmission: ReturnType<typeof receiveSubmission> | undefined;
+    let pendingSubmission: Promise<unknown> | undefined;
 
     await db.transaction(async (tx) => {
       await tx
@@ -1178,13 +1178,11 @@ integration("submission and delivery pipeline", () => {
         idempotencyKey: "archive-race",
         input: { values: { name: "Ada" }, versionId: seeded.version.id },
         slug: seeded.form.slug,
-      });
+      }).catch((error: unknown) => error);
       await new Promise((resolve) => setTimeout(resolve, 25));
     });
 
-    await expect(pendingSubmission).rejects.toMatchObject({
-      code: "NOT_FOUND",
-    });
+    expect(await pendingSubmission).toMatchObject({ code: "NOT_FOUND" });
   });
 
   test("snapshots active endpoint ids when the submission is accepted", async () => {
