@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS dependencies
+FROM node:24.22.0-bookworm-slim@sha256:91acba91b842bec0bf7ea6f5e09c644c7ccad72c4996ed9616d861d1c7cd60d4 AS dependencies
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1 TURBO_TELEMETRY_DISABLED=1 LEFTHOOK=0
 RUN npm install --global pnpm@12.10.1
@@ -40,7 +40,7 @@ USER node
 WORKDIR /app/apps/web
 CMD ["node", "scripts/migrate.mjs"]
 
-FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
+FROM node:24.22.0-bookworm-slim@sha256:91acba91b842bec0bf7ea6f5e09c644c7ccad72c4996ed9616d861d1c7cd60d4 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000 NEXT_TELEMETRY_DISABLED=1
 COPY --from=build --chown=node:node /app/apps/web/.next/standalone ./
