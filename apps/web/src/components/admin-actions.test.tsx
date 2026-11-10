@@ -22,7 +22,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => router }));
 const server = setupServer();
 
 describe("admin actions", () => {
-  beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
+  beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
   afterEach(() => {
     server.resetHandlers();
     router.refresh.mockReset();
