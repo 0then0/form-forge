@@ -3,7 +3,7 @@
 # Form Forge
 
 [![Node.js requirement](https://img.shields.io/badge/Node.js-22.22.2%2B%20%2F%2024.15.0%2B%20%2F%2026%2B-339933?logo=nodedotjs&logoColor=white)](package.json)
-[![pnpm version](https://img.shields.io/badge/pnpm-12.10.1-F69220?logo=pnpm&logoColor=white)](package.json)
+[![pnpm version](https://img.shields.io/badge/pnpm-12.17.0-F69220?logo=pnpm&logoColor=white)](package.json)
 [![CI](https://github.com/0then0/form-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/0then0/form-forge/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/0then0/form-forge)](LICENSE)
 
@@ -24,7 +24,7 @@ Use the hosted form page, embed a form on your site, or submit responses through
 
 ## Quick start
 
-For local development, you need PostgreSQL, a GitHub OAuth application, pnpm **12.10.1**, and a Node.js version supported by [package.json](package.json): 22.22.2+, 24.15.0+, or 26+. See [Getting started](docs/getting-started.md) for the complete setup, including a local PostgreSQL container and OAuth callback URLs.
+For local development, you need PostgreSQL, a GitHub OAuth application, pnpm **12.17.0**, and a Node.js version supported by [package.json](package.json): 22.22.2+, 24.15.0+, or 26+. See [Getting started](docs/getting-started.md) for the complete setup, including a local PostgreSQL container and OAuth callback URLs.
 
 From the repository root:
 

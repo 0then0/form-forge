@@ -91,7 +91,7 @@ Use these build settings:
 
 The root `netlify.toml` supplies the base, build command, publish path, Node.js
 24.22.0, and frozen pnpm install flags. The `packageManager` field pins pnpm
-12.10.1 through Corepack. Hoisting is enabled only for the Netlify install, as
+12.17.0 through Corepack. Hoisting is enabled only for the Netlify install, as
 recommended by Netlify for pnpm/Next.js. Do not set `NODE_ENV=production` during
 dependency installation: the build needs development dependencies.
 
