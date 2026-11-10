@@ -21,7 +21,7 @@ beforeEach(() => {
     connect: vi.fn().mockResolvedValue(undefined),
     end: vi.fn().mockResolvedValue(undefined),
   });
-  mocks.createClient.mockImplementation(function Client() {
+  mocks.createClient.mockImplementation(function client() {
     return mocks.client;
   });
   mocks.drizzle.mockReturnValue("database");
