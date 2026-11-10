@@ -118,15 +118,6 @@ with tempfile.TemporaryDirectory(prefix=project + "-") as temporary:
         names = list(source_record["files"])
     else:
         names = run(["git", "-C", str(ROOT.parent), "ls-files"]).splitlines()
-        # New acceptance utilities are intentionally uncommitted during review.
-        names = sorted(
-            set(names)
-            | {
-                "deploy/backup_manifest.py",
-                "deploy/acceptance/cold_restore.py",
-                "deploy/tests/test_cold_restore.py",
-            }
-        )
         source_record = {
             "commit": run(["git", "-C", str(ROOT.parent), "rev-parse", "HEAD"]),
             "workingTree": run(
@@ -386,7 +377,7 @@ commit;""")
         return slug, version
 
     def persisted_outage(submission):
-        # after() now attempts ingestion after commit. Require the real failed
+        # after() attempts ingestion right after commit. Require the real failed
         # attempt to settle before outage/backup assertions, rather than treating
         # an intermediate lease as a completed backup boundary.
         rows = sql(

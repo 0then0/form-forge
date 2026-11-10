@@ -12,14 +12,6 @@ allowBuilds:
   msw: false
   protobufjs: false
 
-# Keep the direct versions from the dependency upgrade; all other releases
-# remain subject to pnpm's default 24-hour minimum release age.
-minimumReleaseAgeExclude:
-  - "@types/node@24.19.2"
-  - inngest@4.23.0
-  - lucide-react@1.55.0
-  - prettier@3.9.10
-
 # Security overrides for transitive dependencies without a fixed upstream chain.
 # gaxios 7.1.4+ drops rimraf, removing vulnerable glob 10 / minimatch 9
 # (GHSA-3g3m-2fjr-6pw4, GHSA-g3hv-75wg-m249); gcp-metadata 8 still allows 7.1.3.
