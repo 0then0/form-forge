@@ -2,21 +2,69 @@
 
 [Project overview](../README.md) · [Documentation](../README.md#documentation)
 
-The pnpm workspace keeps domain logic, rendering, UI, and infrastructure separate:
+## Repository layout
 
-- `apps/web`: Next.js App Router, admin and public routes, Auth.js, PostgreSQL, Drizzle migrations, Inngest, and Sentry.
-- `packages/form-schema`: domain schemas, DTOs, visibility rules, normalization, and validation. TypeScript and Zod only, without framework or platform runtime dependencies.
-- `packages/form-renderer`: headless React Hook Form renderer with replaceable UI adapters.
-- `packages/ui`: shared UI primitives without form domain logic.
+Form Forge is a pnpm workspace built with Turborepo:
 
-The frontend uses React 19, Tailwind CSS, Radix UI, TanStack Query for server state, and TanStack Table for tabular views. Editor state stays in React Hook Form and local React state.
+```txt
+apps/web/                 Next.js application: admin UI, public forms, API routes
+  app/                    App Router pages and route handlers
+  src/auth/               Auth.js configuration and request-origin checks
+  src/db/                 Drizzle schema and database client
+  src/services/           Domain services: forms, submissions, deliveries, outbox
+  src/inngest/            Background functions
+  src/integration/        Webhook transport, URL policy, secret encryption, DB tests
+  drizzle/                Committed SQL migrations
+  e2e/                    Playwright tests
+  scripts/                Migration, startup and readiness scripts
+packages/form-schema/     Form schema, validation and visibility rules
+packages/form-renderer/   Headless React Hook Form renderer
+packages/ui/              Shared UI primitives
+deploy/                   Docker Compose deployment, backups and acceptance tests
+docs/                     User and contributor documentation
+```
 
-Drafts are validated JSONB snapshots. Publishing creates an immutable `form_versions` record, and every submission references its exact version. Submission persistence and outbox creation share one PostgreSQL transaction. Inngest processes the outbox; delivery outcomes and attempt history are database records, not just logs.
+The packages keep domain logic, rendering and UI separate:
 
-## Scope and limitations
+- `packages/form-schema` defines schemas, DTOs, visibility rules, normalization and
+  validation with TypeScript and Zod only, without framework or platform
+  dependencies. The editor, public form and server share it.
+- `packages/form-renderer` renders a schema with React Hook Form through
+  replaceable UI components.
+- `packages/ui` contains UI primitives without form domain logic.
 
-Automated checks cover the form lifecycle, PostgreSQL invariants, and a built application smoke test. They do not certify an installation's networking, live OAuth, cloud Inngest, backup recovery, or capacity. Verify those deployment-specific controls before accepting public traffic.
+Workspace packages are internal and are not published to npm.
 
-The application supports GitHub, Google and GitLab sign-in, plain iframe embedding and an automatic-height embed script. It does not include a visual page builder, custom domains, API-key authentication, email invitations, or a general-purpose embed SDK. Workspace packages are internal and are not published to npm.
+## Technology
 
-The local Docker credentials and Inngest `local` values are not deployment configuration. Workspace limits bound new logical work, but manual retries still consume resources and stored history grows over time; monitor usage and provision storage for your retention needs.
+- **Application:** Next.js App Router, React 19, Tailwind CSS and Radix UI.
+  TanStack Query manages server state and TanStack Table renders tables. Editor
+  state lives in React Hook Form and local React state.
+- **Authentication:** Auth.js (NextAuth) with GitHub, Google and GitLab.
+- **Database:** PostgreSQL through Drizzle ORM and the `pg` driver.
+- **Background jobs:** [Inngest](https://www.inngest.com/), self-hosted or Inngest
+  Cloud.
+- **Error reporting:** optional Sentry, configured by the deployment owner.
+
+## Data flow
+
+Drafts are validated JSONB snapshots. Publishing creates an immutable
+`form_versions` record, and every response references the exact version it was
+submitted against.
+
+Accepting a response writes the response, quota reservations and an outbox event
+in one PostgreSQL transaction. Inngest then processes the outbox and sends
+webhooks. Delivery state and attempt history are stored as database records, and
+a recovery job repairs work that was interrupted. See [Webhooks](webhooks.md#how-delivery-works).
+
+## Scope
+
+Form Forge supports GitHub, Google and GitLab sign-in, hosted forms, plain iframe
+embedding and an automatic-height embed script. It does not include a visual page
+builder, custom domains, API-key authentication, email invitations or a
+general-purpose embed SDK.
+
+Automated tests cover the form lifecycle, PostgreSQL invariants and a smoke test
+of the production build. They do not verify an installation's networking, live
+OAuth, Inngest Cloud, backup recovery or capacity; check those for your
+deployment before accepting public traffic.

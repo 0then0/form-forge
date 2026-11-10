@@ -111,7 +111,7 @@ export const openApiDocument = {
     title: "Form Forge product API",
     version: "1.0.0",
     description:
-      "Public submissions and workspace product operations. Admin access uses the existing NextAuth session; owner/editor/viewer permissions are enforced by each service. OAuth callbacks, scheduler and internal test controls are outside this document. MCP transport is documented separately in README.",
+      "Public submissions and workspace product operations. Admin access uses the NextAuth session; owner/editor/viewer permissions are enforced by each service. OAuth callbacks, scheduler and internal test controls are outside this document. The MCP endpoint is documented in docs/api.md.",
   },
   servers: [{ url: "/" }],
   components: {

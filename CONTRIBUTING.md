@@ -1,51 +1,57 @@
 # Contributing to Form Forge
 
-Form Forge is a small libre/self-hosted application. Keep changes focused and
-prefer existing services, workspace packages and platform APIs over new dependencies
-or external infrastructure. Discuss substantial features, dependencies and public
-contract changes in an issue before implementing them.
+Thank you for your interest in Form Forge. Bug reports, documentation fixes and
+focused improvements are all welcome.
 
-By participating, follow the [Code of conduct](CODE_OF_CONDUCT.md). Report
-vulnerabilities through the [security policy](SECURITY.md), not a public bug report.
+Form Forge is a small self-hosted application, so we prefer existing services,
+workspace packages and platform APIs over new dependencies or external
+infrastructure. Please open an issue to discuss substantial features, new
+dependencies or changes to public contracts before you start working on them.
 
-## Local setup
+By participating, you agree to follow the [Code of conduct](CODE_OF_CONDUCT.md).
+Report vulnerabilities through the [security policy](SECURITY.md), not in a public
+issue.
 
-Follow [Getting started](docs/getting-started.md) for Node.js, the pinned pnpm
-version, PostgreSQL, environment variables and OAuth configuration. Use pnpm and
-commit intentional manifest changes together with `pnpm-lock.yaml`. Do not commit
-credentials, local environment files, database dumps or submission data. Environment
-examples must contain placeholders only.
+## Set up your environment
 
-The [development guide](docs/development.md) describes commands, CI and test
-databases. `.editorconfig`, Biome and Prettier define formatting. Use `pnpm format`
-on your own changes; avoid unrelated formatting or snapshot updates.
+Follow [Getting started](docs/getting-started.md) to install Node.js and pnpm,
+start PostgreSQL, configure environment variables and GitHub sign-in. The
+[development guide](docs/development.md) describes the available commands, tests
+and CI.
 
-## Changes and pull requests
+- Use pnpm, and commit intended manifest changes together with `pnpm-lock.yaml`.
+- Never commit credentials, local environment files, database dumps or response
+  data. Example environment files contain placeholders only.
+- `.editorconfig`, Biome and Prettier define formatting. Run `pnpm format` on
+  your changes and avoid unrelated formatting changes.
 
-- Search existing issues and PRs before opening a duplicate. Include a minimal
-  reproduction for bugs and the user problem for feature requests.
-- Work on a branch in your fork and open a focused PR against `main`. Explain
-  behavior before and after, compatibility implications and checks actually run.
-  Add screenshots for meaningful UI changes, with personal data removed.
-- Add regression tests for meaningful behavior. Preserve server-side workspace
-  authorization, immutable published schemas and answers, idempotency, transactional
-  outbox semantics and compatibility with existing forms.
-- Generate additive migrations with `pnpm db:generate`; commit SQL and Drizzle
-  metadata together. Do not edit applied migrations or reset migration history.
-  Test both empty-database installation and upgrades on disposable local databases.
-- Use Conventional Commits in English, such as `fix: preserve submission filters`.
-  No CLA is required; contributions are provided under the project's
-  [Apache License 2.0](LICENSE).
+## Make a change
 
-The sole maintainer may push directly to `main`; external and Dependabot changes
-use PRs. This does not waive verification. Follow the
-[dependency maintenance policy](docs/dependency-maintenance.md) for toolchain,
-major and security updates. Do not merge unreviewed dependency changes just to
-clear the update queue.
+- Search existing issues and pull requests first. For bugs, include a minimal
+  reproduction; for features, describe the problem you want to solve.
+- Work on a branch in your fork and open a focused pull request against `main`.
+  Describe the behavior before and after, compatibility implications and the
+  checks you ran. Add screenshots for visible UI changes, with personal data
+  removed.
+- Add regression tests for meaningful behavior. Keep these guarantees intact:
+  server-side workspace authorization, immutable published schemas and answers,
+  idempotent submissions, the transactional outbox, and compatibility with
+  existing forms.
+- For database changes, generate a new migration with `pnpm db:generate` and
+  commit the SQL and Drizzle metadata together. Never edit an applied migration
+  or reset migration history. Test both a fresh installation and an upgrade on
+  disposable local databases.
+- Write commit messages in English using
+  [Conventional Commits](https://www.conventionalcommits.org/), for example
+  `fix: preserve submission filters`.
 
-## Verification
+All changes to `main`, including the maintainer's, go through pull requests with
+passing CI. Dependency updates follow the
+[dependency maintenance policy](docs/dependency-maintenance.md).
 
-Run checks relevant to the change and report any checks you could not run:
+## Verify your change
+
+Run the checks relevant to your change and mention any you could not run:
 
 ```sh
 pnpm format:check
@@ -56,30 +62,31 @@ pnpm test
 pnpm test:deployment
 ```
 
-For runtime, database or UI changes, also run the applicable PostgreSQL,
+For changes to runtime behavior, the database or the UI, also run the PostgreSQL,
 Playwright and build checks from [Development](docs/development.md) and
-[Deployment verification](deploy/VERIFICATION.md). `pnpm test` skips PostgreSQL
-integration tests unless `TEST_DATABASE_URL` is set. Integration and browser
-suites delete fixture data: use separate disposable local databases, never a
-shared or production database. A successful build alone does not verify a change.
+[Deployment verification](deploy/VERIFICATION.md). `pnpm test` skips the
+PostgreSQL integration tests unless `TEST_DATABASE_URL` is set. Integration and
+browser tests delete their data, so use separate disposable local databases and
+never a shared or production database. A successful build alone does not verify a
+change.
 
-## Automation and releases
+## Automation
 
-The existing [workflows](.github/workflows) have distinct responsibilities:
+The [GitHub Actions workflows](.github/workflows) are:
 
-- **CI** runs on PRs and pushes to `main`, using disposable PostgreSQL and test
-  credentials. It checks formatting, types, lint, unused code, tests and builds.
-- **Monthly dependency review** opens a review issue; Dependabot opens update PRs.
-  Neither automatically merges changes.
-- **Database migrations** runs manually from `main`, using the dedicated Neon
-  secret. See the [Neon migration guide](deploy/NETLIFY.md). It never runs on push.
-- **Deploy production** is a separate manual Netlify build trigger. Success means
-  Netlify accepted the request, not that deployment finished.
-- **Release** publishes committed source and checksums when a `v*` tag is pushed
-  and matches `deploy/VERSION`. A release does not require a PR and does not
-  deploy the application or migrate its database.
+- **CI:** runs on every pull request and push to `main` with a disposable
+  PostgreSQL database and test credentials. It checks formatting, types, lint and
+  unused code, runs all test suites and builds the application.
+- **Dependency review:** opens a monthly issue listing major and toolchain
+  updates. Dependabot opens update pull requests. Neither merges anything
+  automatically.
+- **Database migrations** and **Deploy production:** started manually by the
+  maintainer for the Netlify installation.
+- **Release:** publishes a source release when a version tag is pushed.
 
-Maintainers update [CHANGELOG.md](CHANGELOG.md), `deploy/VERSION` and
-`deploy/RELEASE_NOTES.md` for a release after checking the intended revision.
-Detailed release notes must describe migrations and downgrade limits. Do not
-create tags or run production workflows as part of an ordinary contribution.
+See [Releasing](docs/releasing.md) for how releases are made.
+
+## License
+
+There is no contributor license agreement. By submitting a contribution, you
+agree that it is provided under the project's [Apache License 2.0](LICENSE).

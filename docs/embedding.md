@@ -2,8 +2,28 @@
 
 [Project overview](../README.md) · [Documentation](../README.md#documentation)
 
-Plain iframe snippets remain supported. For automatic height, add `data-form-forge`
-and load the script once (multiple frames and dynamically inserted frames work):
+You can place a published form on another site with an iframe. The form editor
+provides a ready-to-copy snippet. Add `?embed=1` to the hosted form URL to use the
+compact iframe layout.
+
+## Plain iframe
+
+A plain iframe needs no script and keeps the height you set:
+
+```html
+<iframe
+  src="https://forms.example.org/f/your-slug?embed=1"
+  title="Contact"
+  width="100%"
+  height="640"
+  loading="lazy"
+></iframe>
+```
+
+## Automatic height
+
+To resize the iframe to its content, add the `data-form-forge` attribute and load
+`embed.js` from your Form Forge installation once per page:
 
 ```html
 <iframe
@@ -17,24 +37,50 @@ and load the script once (multiple frames and dynamically inserted frames work):
 <script src="https://forms.example.org/embed.js" defer></script>
 ```
 
-The script adds an exact parent origin and a random per-frame channel to the iframe
-URL and reloads it once when mounted. Mount frames before visitors begin filling
-them. ResizeObserver measures the compact content, including field errors,
-conditional fields and success/closed messages, so height can grow and shrink.
-Messages require the expected form origin, the exact `iframe.contentWindow`, the
-channel, protocol/version and a valid bounded integer height. Every outgoing
-message uses an explicit target origin. The hosted bridge also checks the parent
-origin against the document referrer when one is available.
+The script handles multiple forms on one page and frames inserted later. The
+height follows the form's content, including validation errors, conditional
+fields and success or closed messages, and can both grow and shrink.
 
-Listen on a frame or an ancestor for bubbling `formforge:ready` and
-`formforge:submitted` events. `event.detail` contains only `{ iframe }`, with no
-answer values or response identifiers. Removing frames detaches their message
-handlers automatically. Explicit disposal also sends a validated control message
-to disconnect the hosted observer. Use `window.FormForgeEmbed.destroy(iframe)` for explicit
-disposal, `scan(container)`/`mount(iframe)` for manual mounting, and `destroyAll()`
-to disconnect the observer and all handlers when disposing an entire integration.
-Without the script/marker, the iframe keeps its specified fixed height.
+When the script mounts a frame, it adds the parent page's origin and a random
+per-frame channel to the iframe URL and reloads the frame once. Mount frames
+before visitors start filling them in.
 
-Hosted forms and the submit API remain public. Message-origin checks are an embed
-integration boundary; they do not protect the public API against direct requests.
-This release does not add an embed-origin allowlist or a claim of API protection.
+## Events
+
+The script dispatches two events that bubble from the iframe element:
+
+- `formforge:ready`: the form has loaded.
+- `formforge:submitted`: the visitor submitted a response.
+
+```js
+document.addEventListener("formforge:submitted", (event) => {
+  console.log("Submitted from", event.detail.iframe);
+});
+```
+
+`event.detail` contains only `{ iframe }`. Events never include answers or
+response IDs.
+
+## Manual control
+
+`window.FormForgeEmbed` provides methods for single-page applications and other
+dynamic pages:
+
+- `scan(container)`: mount every `data-form-forge` iframe inside `container`.
+- `mount(iframe)`: mount one iframe.
+- `destroy(iframe)`: disconnect one iframe and tell the hosted form to stop
+  reporting its height.
+- `destroyAll()`: disconnect every frame and stop watching the page.
+
+Frames removed from the page are cleaned up automatically.
+
+## Security
+
+Messages between the page and the iframe are accepted only from the expected
+origin, the exact iframe window and its channel, with a known protocol version
+and a valid, bounded height. Every outgoing message names an explicit target
+origin. When the browser provides a referrer, the hosted form also checks the
+parent origin against it.
+
+These checks protect the embed integration only. Hosted forms and the submission
+API stay public, and Form Forge has no allowlist of sites that may embed a form.

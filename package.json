@@ -1,6 +1,14 @@
 {
   "name": "form-forge",
   "private": true,
+  "description": "Self-hosted, schema-first form platform with versioned forms, a public submission API and signed webhooks.",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/0then0/form-forge#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0then0/form-forge.git"
+  },
+  "bugs": "https://github.com/0then0/form-forge/issues",
   "packageManager": "pnpm@12.17.0",
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"

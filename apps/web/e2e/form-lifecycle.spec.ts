@@ -202,7 +202,7 @@ test("creates, publishes, submits, fails, retries, and succeeds", async ({
   });
   await expect(page.getByRole("status")).toBeVisible();
 
-  // The new after() path must finish its failed ingestion attempt before the
+  // The after() path must finish its failed ingestion attempt before the
   // fixture advances persisted scheduling and takes over as the test scheduler.
   await expect
     .poll(

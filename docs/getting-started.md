@@ -8,8 +8,10 @@
 - pnpm 12.17.0, as pinned in `package.json`.
 - PostgreSQL. The Docker example below uses PostgreSQL 16.
 - A GitHub OAuth application for signing in.
-- OpenSSL for the HTTPS receiver tests. Deployment utilities also require Python 3.9 or newer
-  and Docker; see [deployment verification](../deploy/VERIFICATION.md).
+- OpenSSL, to generate secrets.
+
+Running the deployment tests also requires Python 3.9 or newer and Docker; see
+[Development](development.md).
 
 Run the following commands from the repository root unless stated otherwise.
 
@@ -102,7 +104,7 @@ npx --ignore-scripts=false inngest-cli@latest dev \
 
 This runs the standalone CLI without adding a workspace dependency. Its dashboard is available at `http://localhost:8288`.
 
-Both processes are needed to exercise webhook delivery. See [delivery and recovery](webhooks.md#delivery-and-recovery) for the outbox lifecycle.
+Both processes are needed to exercise webhook delivery. See [how delivery works](webhooks.md#how-delivery-works) for details.
 
 ## 7. Create your first form
 
@@ -113,3 +115,10 @@ Both processes are needed to exercise webhook delivery. See [delivery and recove
 5. To try delivery, configure a webhook before submitting another response. Inspect its attempts in **Deliveries** and background runs in the Inngest dashboard.
 
 Webhook endpoints must use public HTTPS addresses. Localhost and private-network targets are rejected. Forms without configured endpoints can still collect submissions.
+
+## Next steps
+
+- [User guide](user-guide.md): intake controls, privacy, responses and roles.
+- [Webhooks](webhooks.md): verify signatures and handle retries.
+- [Public API](api.md): submit responses from your own code.
+- [Development](development.md): tests, database suites and CI.
