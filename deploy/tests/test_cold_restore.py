@@ -389,7 +389,7 @@ class DockerScopedCleanupTests(unittest.TestCase):
             self.skipTest("Docker unavailable")
         project = "ff-destination-test-" + os.urandom(6).hex()
         volume = project + "_application-data"
-        image = "node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20"
+        image = "node:24.22.0-bookworm-slim@sha256:91acba91b842bec0bf7ea6f5e09c644c7ccad72c4996ed9616d861d1c7cd60d4"
 
         def run(command, check=True):
             return subprocess.run(
@@ -456,7 +456,7 @@ class DockerScopedCleanupTests(unittest.TestCase):
             compose_file = Path(temporary) / "compose.yaml"
             compose_file.write_text("""services:
   receiver:
-    image: node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+    image: node:24.22.0-bookworm-slim@sha256:91acba91b842bec0bf7ea6f5e09c644c7ccad72c4996ed9616d861d1c7cd60d4
     profiles: [fixture]
     command: [node, -e, "setInterval(()=>{},1000)"]
     volumes: [profile-data:/evidence]

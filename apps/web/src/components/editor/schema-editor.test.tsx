@@ -50,7 +50,7 @@ const wrapper = ({ children }: { children: ReactNode }) => (
 );
 
 describe("SchemaEditor", () => {
-  beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
+  beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
   beforeEach(() => {
     router.refresh.mockReset();
     vi.spyOn(window, "confirm").mockReturnValue(true);

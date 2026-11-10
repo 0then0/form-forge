@@ -11,7 +11,7 @@ describe("LocalDateTime", () => {
 
   it("uses the browser's local formatter after hydration", async () => {
     const format = vi.fn(() => "Aug 15, 2026, 9:30 PM");
-    const formatter = vi.fn(function DateTimeFormat() {
+    const formatter = vi.fn(function dateTimeFormat() {
       return { format };
     });
     vi.stubGlobal("Intl", { DateTimeFormat: formatter });

@@ -726,7 +726,7 @@ commit;""")
                 ]
             )
             for service, image in {
-                "node": "node:24.21.0-bookworm-slim",
+                "node": "node:24.22.0-bookworm-slim",
                 "postgres": "postgres:16.14-bookworm",
                 "redis": "redis:7.4.8-bookworm",
                 "inngest": "inngest/inngest:v1.46.0",
