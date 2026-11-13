@@ -41,6 +41,15 @@ The script handles multiple forms on one page and frames inserted later. The
 height follows the form's content, including validation errors, conditional
 fields and success or closed messages, and can both grow and shrink.
 
+Visitors can opt into **Save answers on this device** inside an iframe, with the
+same Resume, Discard and submission retry controls as a hosted form. Save and
+conflict notices also update the automatic height. Answers remain in the form
+origin's browser storage and are never sent through embed messages. Browsers may
+partition or block third-party storage, so an embedded save may be unavailable
+on the hosted page or another embedding site. Storage failures are shown inside
+the form and do not prevent ordinary submission. See the [user guide](user-guide.md#saving-unfinished-answers-on-a-device)
+for retention and privacy details.
+
 When the script mounts a frame, it adds the parent page's origin and a random
 per-frame channel to the iframe URL and reloads the frame once. Mount frames
 before visitors start filling them in.

@@ -7,11 +7,12 @@ import {
   getVisibleFields,
   isSafeHttpUrl,
   normalizeSubmission,
+  sanitizePartialAnswers,
   type FormField,
   type FormSchemaV1,
   type NormalizedSubmission,
 } from "@form-forge/form-schema";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm, useWatch, type FieldErrors } from "react-hook-form";
 
 import { defaultRendererComponents } from "./default-components";
@@ -24,6 +25,9 @@ export type FormRendererProps = {
   onSubmit: (values: NormalizedSubmission) => Promise<void> | void;
   components?: Partial<RendererComponents>;
   disabled?: boolean;
+  restoreAnswers?: { revision: string; answers: unknown } | undefined;
+  onAnswersChange?: ((answers: NormalizedSubmission) => void) | undefined;
+  onRestoreResult?: ((result: { droppedKeys: string[] }) => void) | undefined;
 };
 
 const getFieldError = (
@@ -54,6 +58,9 @@ export const FormRenderer = ({
   components,
   disabled = false,
   onSubmit,
+  onAnswersChange,
+  onRestoreResult,
+  restoreAnswers,
   schema,
 }: FormRendererProps) => {
   const ui = useMemo(
@@ -67,7 +74,9 @@ export const FormRenderer = ({
     formState: { errors, isSubmitting },
     handleSubmit,
     register,
+    reset,
     setError,
+    setValue,
   } = useForm<FormValues>({
     defaultValues: {},
     mode: "all",
@@ -89,6 +98,36 @@ export const FormRenderer = ({
   });
   const watched = useWatch({ control });
   const visibleFields = getVisibleFields(schema, watched);
+  const restoredRevision = useRef<string | undefined>(undefined);
+  const lastObservedAnswers = useRef<string | undefined>(undefined);
+  const restoring = useRef(false);
+
+  useEffect(() => {
+    if (!restoreAnswers || restoredRevision.current === restoreAnswers.revision)
+      return;
+    restoredRevision.current = restoreAnswers.revision;
+    const result = sanitizePartialAnswers(schema, restoreAnswers.answers);
+    // Keep the original empty defaults. Restored values must not become field
+    // defaults that reappear after shouldUnregister removes a hidden control.
+    reset({}, { keepDefaultValues: true, keepFieldsRef: true });
+    for (const [key, value] of Object.entries(result.answers))
+      setValue(key, value);
+    setServerError(undefined);
+    restoring.current = true;
+    onRestoreResult?.({ droppedKeys: result.droppedKeys });
+  }, [onRestoreResult, reset, restoreAnswers, schema, setValue]);
+
+  useEffect(() => {
+    if (restoring.current) {
+      restoring.current = false;
+      return;
+    }
+    const { answers } = sanitizePartialAnswers(schema, watched);
+    const serialized = JSON.stringify(answers);
+    if (serialized === lastObservedAnswers.current) return;
+    lastObservedAnswers.current = serialized;
+    onAnswersChange?.(answers);
+  }, [onAnswersChange, schema, watched]);
 
   const submit = handleSubmit(async (values) => {
     clearErrors();

@@ -14,6 +14,7 @@ import type {
   FormSchemaV1,
   NormalizeSubmissionResult,
   NormalizedSubmissionValue,
+  NormalizedSubmission,
   SubmissionFieldError,
 } from "./types";
 
@@ -172,6 +173,87 @@ export const getVisibleFields = (
     }
   }
   return visible;
+};
+
+/**
+ * Keep bounded, typed partial input without requiring submission validity.
+ * Incomplete text and numeric input stays editable; visibility still uses the
+ * same validated preceding values as submission and the renderer.
+ */
+export const sanitizePartialAnswers = (
+  schema: FormSchemaV1,
+  input: unknown,
+): { answers: NormalizedSubmission; droppedKeys: string[] } => {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return { answers: {}, droppedKeys: ["_root"] };
+  }
+  const values = input as Record<string, unknown>;
+  const candidates: NormalizedSubmission = {};
+  let totalTextLength = 0;
+  for (const field of schema.fields) {
+    if (!Object.hasOwn(values, field.key)) continue;
+    const value = values[field.key];
+    let supported = false;
+    switch (field.type) {
+      case "shortText":
+      case "longText": {
+        const limit = Math.min(
+          field.validation?.maxLength ?? MAX_LONG_TEXT_LENGTH,
+          field.type === "shortText"
+            ? MAX_SHORT_TEXT_LENGTH
+            : MAX_LONG_TEXT_LENGTH,
+        );
+        supported = typeof value === "string" && value.length <= limit;
+        break;
+      }
+      case "email":
+        supported =
+          typeof value === "string" && value.length <= MAX_EMAIL_LENGTH;
+        break;
+      case "number":
+        supported =
+          (typeof value === "number" && Number.isFinite(value)) ||
+          (typeof value === "string" && value.length <= MAX_SHORT_TEXT_LENGTH);
+        break;
+      case "select":
+        supported =
+          typeof value === "string" &&
+          (value === "" ||
+            field.options.some((option) => option.value === value));
+        break;
+      case "checkbox":
+        supported = typeof value === "boolean";
+        break;
+      case "date":
+        supported =
+          typeof value === "string" &&
+          (value === "" || dateSchema.safeParse(value).success);
+        break;
+    }
+    if (!supported) continue;
+    if (typeof value === "string") {
+      if (totalTextLength + value.length > MAX_SUBMISSION_TEXT_LENGTH) continue;
+      totalTextLength += value.length;
+    }
+    Object.defineProperty(candidates, field.key, {
+      configurable: true,
+      enumerable: true,
+      value,
+      writable: true,
+    });
+  }
+  const visibleKeys = new Set(
+    getVisibleFields(schema, candidates).map(({ key }) => key),
+  );
+  const answers = Object.fromEntries(
+    Object.entries(candidates).filter(([key]) => visibleKeys.has(key)),
+  );
+  return {
+    answers,
+    droppedKeys: Object.keys(values).filter(
+      (key) => !Object.hasOwn(answers, key),
+    ),
+  };
 };
 
 export const normalizeSubmission = (

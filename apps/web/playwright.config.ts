@@ -8,6 +8,8 @@ export default defineConfig({
   testDir: "./e2e",
   testIgnore: "**/production-smoke.spec.ts",
   fullyParallel: false,
+  // Lifecycle fixtures share and reset one disposable database across files.
+  workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   reporter: "html",

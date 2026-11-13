@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -25,6 +25,192 @@ const schema = {
 };
 
 describe("FormRenderer", () => {
+  it("restores every supported field type while preserving incomplete input", async () => {
+    const base = { required: false, width: "full" as const };
+    const onAnswersChange = vi.fn();
+    const answers = {
+      short: "Short text",
+      long: "Long text",
+      email: "unfinished@",
+      number: "-",
+      select: "yes",
+      checkbox: true,
+      date: "2026-11-13",
+    };
+    render(
+      <FormRenderer
+        schema={{
+          ...schema,
+          fields: [
+            {
+              ...base,
+              id: "short",
+              key: "short",
+              label: "Short",
+              type: "shortText",
+            },
+            {
+              ...base,
+              id: "long",
+              key: "long",
+              label: "Long",
+              type: "longText",
+            },
+            {
+              ...base,
+              id: "email",
+              key: "email",
+              label: "Email",
+              type: "email",
+            },
+            {
+              ...base,
+              id: "number",
+              key: "number",
+              label: "Number",
+              type: "number",
+            },
+            {
+              ...base,
+              id: "select",
+              key: "select",
+              label: "Select",
+              type: "select",
+              options: [{ label: "Yes", value: "yes" }],
+            },
+            {
+              ...base,
+              id: "checkbox",
+              key: "checkbox",
+              label: "Checkbox",
+              type: "checkbox",
+            },
+            { ...base, id: "date", key: "date", label: "Date", type: "date" },
+          ],
+        }}
+        onSubmit={vi.fn()}
+        onAnswersChange={onAnswersChange}
+        restoreAnswers={{ revision: "1", answers }}
+      />,
+    );
+    expect(screen.getByLabelText("Short")).toHaveValue(answers.short);
+    expect(screen.getByLabelText("Long")).toHaveValue(answers.long);
+    expect(screen.getByLabelText("Email")).toHaveValue(answers.email);
+    expect(screen.getByLabelText("Number")).toHaveValue(answers.number);
+    expect(screen.getByLabelText("Select")).toHaveValue(answers.select);
+    expect(screen.getByLabelText("Checkbox")).toBeChecked();
+    expect(screen.getByLabelText("Date")).toHaveValue(answers.date);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(onAnswersChange).toHaveBeenLastCalledWith(answers),
+    );
+  });
+
+  it("restores partial input once per revision without submitting or validating it", async () => {
+    const onSubmit = vi.fn();
+    const onAnswersChange = vi.fn();
+    const onRestoreResult = vi.fn();
+    const { rerender } = render(
+      <FormRenderer
+        schema={schema}
+        onSubmit={onSubmit}
+        onAnswersChange={onAnswersChange}
+        onRestoreResult={onRestoreResult}
+        restoreAnswers={{
+          revision: "1",
+          answers: { email: "unfinished@", unknown: "discarded" },
+        }}
+      />,
+    );
+    expect(screen.getByLabelText("Email *")).toHaveValue("unfinished@");
+    expect(screen.getByLabelText("Email *")).not.toHaveAttribute(
+      "aria-invalid",
+    );
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onRestoreResult).toHaveBeenCalledWith({ droppedKeys: ["unknown"] });
+    await waitFor(() =>
+      expect(onAnswersChange).toHaveBeenLastCalledWith({
+        email: "unfinished@",
+      }),
+    );
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Email *"), "more");
+    rerender(
+      <FormRenderer
+        schema={schema}
+        onSubmit={onSubmit}
+        restoreAnswers={{ revision: "1", answers: { email: "overwritten" } }}
+      />,
+    );
+    expect(screen.getByLabelText("Email *")).toHaveValue("unfinished@more");
+    rerender(
+      <FormRenderer
+        schema={schema}
+        onSubmit={onSubmit}
+        restoreAnswers={{ revision: "2", answers: {} }}
+      />,
+    );
+    expect(screen.getByLabelText("Email *")).toHaveValue("");
+  });
+
+  it("observes only visible answers and never revives restored conditional defaults", async () => {
+    const onAnswersChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <FormRenderer
+        schema={{
+          ...schema,
+          fields: [
+            {
+              id: "kind",
+              key: "kind",
+              label: "Kind",
+              required: false,
+              type: "select",
+              width: "full",
+              options: [
+                { label: "Business", value: "business" },
+                { label: "Personal", value: "personal" },
+              ],
+            },
+            {
+              id: "company",
+              key: "company",
+              label: "Company",
+              required: false,
+              type: "shortText",
+              width: "full",
+              visibility: {
+                fieldKey: "kind",
+                operator: "equals",
+                value: "business",
+              },
+            },
+          ],
+        }}
+        onSubmit={vi.fn()}
+        onAnswersChange={onAnswersChange}
+        restoreAnswers={{
+          revision: "1",
+          answers: { kind: "business", company: "Restored company" },
+        }}
+      />,
+    );
+    expect(await screen.findByLabelText("Company")).toHaveValue(
+      "Restored company",
+    );
+    await user.selectOptions(screen.getByLabelText("Kind"), "personal");
+    expect(screen.queryByLabelText("Company")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(onAnswersChange).toHaveBeenLastCalledWith({ kind: "personal" }),
+    );
+    await user.selectOptions(screen.getByLabelText("Kind"), "business");
+    expect(screen.getByLabelText("Company")).toHaveValue("");
+    expect(onAnswersChange).not.toHaveBeenLastCalledWith(
+      expect.objectContaining({ company: "Restored company" }),
+    );
+  });
+
   it("renders semantic fields and submits normalized values", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();

@@ -9,6 +9,9 @@ release also includes detailed upgrade instructions.
 
 ### Added
 
+- Visitor opt-in local saving for hosted and embedded forms, with seven-day
+  expiry, exact-version Resume/Discard, visible storage errors and tab conflicts,
+  and recovery of a frozen submission attempt after a lost server response.
 - Manually started GitHub Actions workflows for Neon database migrations and
   Netlify production deploys.
 - Contribution guide, security policy, code of conduct, issue and pull request

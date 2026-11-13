@@ -19,6 +19,49 @@ always keep a reference to the version they were submitted against.
 
 The interface supports system, light and dark themes.
 
+## Saving unfinished answers on a device
+
+Visitors to a hosted or embedded form can enable **Save answers on this device**.
+Saving is voluntary and off by default. Enabling it saves the current partial
+answers, including incomplete fields; it does not submit them. Wait for the
+**Saved on this device at** confirmation before leaving. Changes are saved after
+a short delay, so the last characters can be lost if the browser crashes before
+the write finishes.
+
+On a later visit, the form shows the saved date and asks the visitor to choose
+**Resume** or **Discard** before applying any answers. Resume keeps saving active.
+Discard or a confirmed successful submission removes that form version's local
+answers and retry state. Disabling saving removes its persistent local copy;
+an unresolved attempt remains available in the current page, with its key and
+payload digest kept in the tab's session state for safe retries. A storage error
+is shown on the form; ordinary filling and submission remain available.
+
+Each save belongs to one deployment origin, form and exact immutable published
+version. A new published version does not import answers from an older version;
+the visitor can delete the incompatible save. Hidden conditional answers are
+removed according to the form's existing visibility rules. Local saving does
+not reopen paused, closed, full or archived forms.
+
+If another tab changes the same save, automatic saving pauses and the visitor
+must choose which answers to keep. Changes are never automatically merged.
+Discard or successful submission in another tab invalidates the local save.
+Browser storage does not provide strict transactions between tabs.
+
+Before submitting, the form fixes the application payload and idempotency key
+for that attempt. If the server may have accepted the response but its reply was
+lost, **Retry original attempt** repeats those values and that key. Editing
+answers cannot silently change the original attempt. **Start a new attempt**
+requires confirmation because the earlier response may already exist. Persistent
+retry recovery is available only when saving was enabled and the attempt was
+successfully written to browser storage.
+
+The existing tab-scoped submission key remains in `sessionStorage`, together
+with a SHA-256 digest that prevents changed answers from reusing that key.
+This session state contains no answers. Without local-saving consent, answers
+and the complete retry payload stay in memory and cannot be recovered after
+closing the tab. An older session key without a payload binding requires an
+explicit new-attempt confirmation.
+
 ## Sign-in methods and account linking
 
 GitHub sign-in is required. Google and GitLab are optional: enable each by
@@ -81,8 +124,24 @@ Each form controls whether it collects source metadata: a visitor ID, the
 referrer, UTM parameters and the user agent. Collection is off by default for new
 forms. When it is off, the hosted form does not create a persistent visitor ID or
 send this context, and the server does not store it even if an API client sends
-it. Turning collection off does not erase metadata saved earlier. Form Forge
-never stores unfinished responses.
+it. Turning collection off does not erase metadata saved earlier.
+
+Unfinished answers are stored only in the visitor's browser after opt-in, never
+as partial responses on the server. Local saves expire after seven days. Each
+record is limited to 256 KiB, with at most ten Form Forge draft records per
+browser storage area; cleanup touches only Form Forge's own draft keys. The
+record includes the form and version identity, timestamps, expiry, answers,
+revision, writer identity and any frozen submission attempt needed for retry.
+The normal submit workflow is the only path that sends these answers to the
+server.
+
+Browser storage is not encrypted by Form Forge and can be read by scripts on
+the same origin or other people using that browser profile. Clearing browser
+data, private browsing, storage restrictions or eviction can remove saves. An
+embedded form uses the browser's storage area for its own origin; browsers may
+partition or block it on other sites, so a save in an embed may not be visible
+on the hosted page. A storage error never means a draft or retry was safely
+saved. Local saving provides no account, cross-device sync or transfer link.
 
 ## Responses
 

@@ -12,7 +12,11 @@ export {
   MAX_SUBMISSION_FIELDS,
   MAX_SUBMISSION_TEXT_LENGTH,
 } from "./limits";
-export { getVisibleFields, normalizeSubmission } from "./submission";
+export {
+  getVisibleFields,
+  normalizeSubmission,
+  sanitizePartialAnswers,
+} from "./submission";
 export { evaluateVisibilityRule, isFieldVisible } from "./visibility";
 export type {
   CheckboxField,
