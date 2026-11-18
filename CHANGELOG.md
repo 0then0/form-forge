@@ -7,12 +7,20 @@ release also includes detailed upgrade instructions.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-18
+
 ### Added
 
 - Portable form templates: export a form's saved draft as a versioned JSON file
   and import it as a new unpublished draft in another workspace or installation,
   after a preview and confirmation. Templates contain only the form definition,
   never responses, settings, members, webhooks or secrets.
+
+### Changed
+
+- A simpler project icon that shows a form.
+- Dependencies updated, including Next.js 16.4.6.
+- Clearer installation checklist and deployment documentation.
 
 ## [0.3.0] - 2026-11-13
 
@@ -85,7 +93,8 @@ for maintenance and rollback requirements.
 See the [0.1.0 release notes](https://github.com/0then0/form-forge/releases/tag/v0.1.0)
 for upgrade limitations and the earlier release candidates.
 
-[Unreleased]: https://github.com/0then0/form-forge/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/0then0/form-forge/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/0then0/form-forge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/0then0/form-forge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/0then0/form-forge/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/0then0/form-forge/releases/tag/v0.1.0

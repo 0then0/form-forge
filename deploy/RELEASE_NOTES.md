@@ -1,38 +1,39 @@
-# 0.3.0
+# 0.4.0
 
-Form Forge 0.3.0 adds voluntary local saving for unfinished hosted and embedded
-forms. Visitors can resume or discard answers for the exact published version,
-resolve tab conflicts, and safely retry a submission whose server response was lost.
+Form Forge 0.4.0 adds portable form templates. You can download a form's saved
+draft as a versioned JSON file and import it as a new unpublished draft in another
+workspace or another Form Forge installation.
 
-## Changes since 0.2.0
+## Changes since 0.3.0
 
-- Opt-in browser drafts expire seven days after the last save, with a 256 KiB
-  record limit and at most ten records. Answers are never saved before consent.
-- Frozen submission attempts preserve the original payload and idempotency key.
-  Starting a different attempt requires confirmation when the outcome is unknown.
-- Storage errors remain visible; browsers may block or partition iframe storage.
-  Local storage is not encrypted and does not provide strict cross-tab transactions.
-- Updated dependencies, Node.js 24.22.0, documentation and manual workflows for
-  Neon migrations and Netlify deployment.
-- The migration CLI bounds connection and lock waits and redacts failures.
+- **Export:** the form editor's **Export** action downloads the current saved
+  draft, not the published version. With unsaved changes, it asks you to save
+  first. The file contains a format identifier, a format version and the form
+  definition only: no responses, settings, members, webhooks or secrets.
+- **Import:** **Forms → Import** validates the file on the server, shows a summary
+  and creates the draft only after confirmation. Each import creates a separate
+  draft with its own address; existing forms are never changed. Importing
+  requires the editor or owner role. Files are limited to 16 MB.
+- New administration endpoints for export, preview and import are described in
+  the OpenAPI document.
+- A simpler project icon, updated dependencies including Next.js 16.4.6, and
+  clearer deployment documentation.
 
-## Upgrade from 0.2.0
+## Upgrade from 0.3.0
 
 Back up your installation and keys, update the source and rebuild images for your
-public hostname following [installation](README.md). No new database migrations,
-settings or environment variables are required by this release. Existing
-published versions, admission policies, quotas and webhook semantics are preserved.
-No deployment or migration is triggered by publishing this release.
+public hostname following the [installation guide](README.md). This release has
+no new database migrations and no new environment variables. Existing forms,
+published versions, responses and webhook behavior are unchanged.
 
-Downgrading to 0.2.0 stops local draft recovery; browser copies remain until expiry
-or browser-data removal. Preserve backups and keys for installation rollback.
+Downgrading to 0.3.0 removes template export and import; forms created by an
+import remain ordinary drafts.
 
 ## Verification and limitations
 
 This release passed CI, the unit and PostgreSQL integration tests, the browser
-tests, and a production build with a smoke test. A test of a lost server
-response confirmed that only one submission and one outbox event were stored and
-that quota was used once.
+tests, and a production build with a smoke test. Template export and import were
+also tested through the interface between two separate local installations.
 
 Live OAuth, installation-specific DNS and TLS, production capacity and a full
 restore from backup were not tested again for this release; see
