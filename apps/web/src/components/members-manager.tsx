@@ -158,7 +158,7 @@ export const MembersManager = ({
             </form>
             <p className="mt-3 text-xs text-slate-500">
               The user must sign in once before they can be added. Email
-              invitations are outside this MVP.
+              invitations are not available.
             </p>
           </CardContent>
         </Card>

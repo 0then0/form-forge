@@ -36,7 +36,7 @@ python3 deploy/acceptance/run.py --cold-restore-only --output deploy/evidence/lo
 ```
 
 Without `--cold-restore-only`, it also runs restart and lost-acknowledgement
-drills on the original installation before the backup and restore.
+scenarios on the original installation before the backup and restore.
 
 The runner builds the application and migration images, creates a Compose
 project with empty volumes and temporary keys, and checks:

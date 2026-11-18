@@ -20,7 +20,7 @@ resolve tab conflicts, and safely retry a submission whose server response was l
 
 Back up your installation and keys, update the source and rebuild images for your
 public hostname following [installation](README.md). No new database migrations,
-owner settings or environment variables are required by this release. Existing
+settings or environment variables are required by this release. Existing
 published versions, admission policies, quotas and webhook semantics are preserved.
 No deployment or migration is triggered by publishing this release.
 
@@ -29,12 +29,12 @@ or browser-data removal. Preserve backups and keys for installation rollback.
 
 ## Verification and limitations
 
-The feature revision passed GitHub CI and local unit/PostgreSQL integration tests,
-17 browser scenarios, production build and smoke testing. Lost-response testing
-confirmed one submission and one outbox event without repeated quota consumption.
-Release preparation is also checked by CI before tagging.
+This release passed CI, the unit and PostgreSQL integration tests, the browser
+tests, and a production build with a smoke test. A test of a lost server
+response confirmed that only one submission and one outbox event were stored and
+that quota was used once.
 
-Live OAuth, installation-specific DNS/TLS, production capacity and a full cold
-restore drill were not revalidated for this release. See [verification](VERIFICATION.md).
-Artifacts contain source, provenance and SHA-256 checksums; no prebuilt images
-are published.
+Live OAuth, installation-specific DNS and TLS, production capacity and a full
+restore from backup were not tested again for this release; see
+[verification](VERIFICATION.md). Release artifacts contain the source, its
+provenance and SHA-256 checksums. No prebuilt images are published.

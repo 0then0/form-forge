@@ -316,7 +316,7 @@ running. With custom Compose files, use the copies stored in the backup's
 `configuration/` directory and change only the project name, paths and local
 port binding.
 
-Use a test receiver for restore drills. A restore can resend deliveries that were
+Use a test receiver when you practice restores. A restore can resend deliveries that were
 already sent, and retries that were due during the outage are sent by the next
 recovery run.
 
