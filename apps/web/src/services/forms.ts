@@ -39,7 +39,7 @@ const draftMutationSchema = z
   })
   .strict();
 
-const assertDraftRevision = (actual: Date, expected: string) => {
+export const assertDraftRevision = (actual: Date, expected: string) => {
   if (actual.getTime() !== new Date(expected).getTime()) {
     throw new AppError(
       "CONFLICT",
@@ -114,9 +114,14 @@ export const publishSavedDraft = async (
   });
 };
 
-export const createForm = async (workspaceSlug: string, name: string) => {
+// Every new form starts as an unpublished draft with its own identity, slug
+// and the database defaults for operational settings.
+export const createDraftForm = async (
+  workspaceSlug: string,
+  schema: FormSchemaV1,
+  auditMetadata: Record<string, unknown> = {},
+) => {
   const workspace = await requireWorkspace(workspaceSlug, "editor");
-  const schema = { ...defaultFormSchema(), title: name };
 
   return db.transaction(async (tx) => {
     const [created] = await tx
@@ -124,8 +129,8 @@ export const createForm = async (workspaceSlug: string, name: string) => {
       .values({
         createdBy: workspace.user.id,
         draftSchema: schema,
-        name,
-        slug: uniqueFormSlug(name),
+        name: schema.title,
+        slug: uniqueFormSlug(schema.title),
         workspaceId: workspace.id,
       })
       .returning();
@@ -134,7 +139,7 @@ export const createForm = async (workspaceSlug: string, name: string) => {
     await tx.insert(auditLogs).values({
       action: "form.created",
       actorId: workspace.user.id,
-      metadata: { name: created.name },
+      metadata: { ...auditMetadata, name: created.name },
       resourceId: created.id,
       resourceType: "form",
       workspaceId: workspace.id,
@@ -142,6 +147,9 @@ export const createForm = async (workspaceSlug: string, name: string) => {
     return created;
   });
 };
+
+export const createForm = (workspaceSlug: string, name: string) =>
+  createDraftForm(workspaceSlug, { ...defaultFormSchema(), title: name });
 
 export const getFormForViewing = cache(
   async (workspaceSlug: string, formId: string) => {

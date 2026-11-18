@@ -1,4 +1,6 @@
 import {
+  FORM_TEMPLATE_FORMAT,
+  FORM_TEMPLATE_VERSION,
   formSchemaV1Schema,
   submissionRequestSchema,
 } from "@form-forge/form-schema";
@@ -151,6 +153,16 @@ export const openApiDocument = {
         },
       },
       FormSchema: schema(formSchemaV1Schema),
+      FormTemplate: {
+        type: "object",
+        additionalProperties: false,
+        required: ["format", "formatVersion", "form"],
+        properties: {
+          format: { const: FORM_TEMPLATE_FORMAT },
+          formatVersion: { const: FORM_TEMPLATE_VERSION },
+          form: ref("FormSchema"),
+        },
+      },
       SubmissionRequest: schema(submissionRequestSchema),
       FormPolicyMutation: schema(formPolicyMutationSchema),
       StatusMutation: schema(submissionStatusMutationSchema),
@@ -282,6 +294,61 @@ export const openApiDocument = {
           ),
         },
       ),
+    },
+    [`${workspacePath}/forms/import/preview`]: {
+      post: operation(
+        "previewFormTemplate",
+        "Validate a template file without writing; returns a summary and the digest to confirm (editor+)",
+        object,
+        { admin: true, parameters: [ws], request: ref("FormTemplate") },
+      ),
+    },
+    [`${workspacePath}/forms/import`]: {
+      post: operation(
+        "importFormTemplate",
+        "Create a new unpublished draft from the previewed template file (editor+)",
+        object,
+        {
+          admin: true,
+          status: 201,
+          parameters: [
+            ws,
+            {
+              name: "digest",
+              in: "query",
+              required: true,
+              description: "SHA-256 digest returned by the preview",
+              schema: { type: "string", pattern: "^[a-f0-9]{64}$" },
+            },
+          ],
+          request: ref("FormTemplate"),
+        },
+      ),
+    },
+    [`${workspacePath}/forms/{formId}/template`]: {
+      get: {
+        operationId: "exportFormTemplate",
+        summary:
+          "Download the saved draft as a template file; 409 when the draft revision changed (viewer+)",
+        security: adminSecurity,
+        parameters: [
+          ...formParams,
+          {
+            name: "revision",
+            in: "query",
+            required: true,
+            description: "Draft revision the client shows as saved",
+            schema: timestamp,
+          },
+        ],
+        responses: {
+          200: {
+            description: "Template file attachment",
+            content: json(ref("FormTemplate")),
+          },
+          ...errors,
+        },
+      },
     },
     [`${workspacePath}/forms/{formId}`]: {
       delete: operation(

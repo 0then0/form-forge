@@ -1,7 +1,11 @@
 // @vitest-environment node
 
-import { defaultFormSchema, type FormSchemaV1 } from "@form-forge/form-schema";
-import { and, count, eq, sql } from "drizzle-orm";
+import {
+  defaultFormSchema,
+  MAX_FORM_TEMPLATE_BYTES,
+  type FormSchemaV1,
+} from "@form-forge/form-schema";
+import { and, count, eq, inArray, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { createHash, createHmac } from "node:crypto";
 import {
@@ -29,6 +33,9 @@ vi.mock("@/auth/session", () => ({
 }));
 
 import { POST as submitRoute } from "../../app/api/forms/[slug]/submit/route";
+import { GET as exportRoute } from "../../app/api/admin/workspaces/[workspaceSlug]/forms/[formId]/template/route";
+import { POST as importRoute } from "../../app/api/admin/workspaces/[workspaceSlug]/forms/import/route";
+import { POST as previewRoute } from "../../app/api/admin/workspaces/[workspaceSlug]/forms/import/preview/route";
 import { inngest } from "@/inngest/client";
 import { db } from "@/db/client";
 import {
@@ -69,6 +76,11 @@ import {
   restoreDraftFromVersion,
   saveDraft,
 } from "@/services/forms";
+import {
+  exportFormTemplate,
+  importFormTemplate,
+  previewFormTemplate,
+} from "@/services/form-templates";
 import { updateMember } from "@/services/memberships";
 import {
   dispatchSubmissionOutbox,
@@ -3258,6 +3270,486 @@ integration("submission and delivery pipeline", () => {
     expect(await db.select().from(webhookDeliveries)).toHaveLength(0);
     expect(await db.select().from(outboxEvents)).toHaveLength(0);
     expect(await db.select().from(webhookEndpoints)).toHaveLength(1);
+  });
+
+  const templateSchema = (title = "Workshop signup"): FormSchemaV1 => ({
+    schemaVersion: 1,
+    title,
+    description: "Pick a session.",
+    fields: [
+      {
+        id: crypto.randomUUID(),
+        key: "session",
+        label: "Session",
+        required: true,
+        type: "select",
+        width: "full",
+        options: [
+          { label: "Morning", value: "morning" },
+          { label: "Afternoon", value: "afternoon" },
+          { label: "Evening", value: "evening" },
+        ],
+      },
+      {
+        id: crypto.randomUUID(),
+        key: "dietary_needs",
+        label: "Dietary needs",
+        required: false,
+        type: "longText",
+        width: "full",
+        webhookKey: "diet",
+        visibility: {
+          fieldKey: "session",
+          operator: "equals",
+          value: "evening",
+        },
+      },
+      {
+        id: crypto.randomUUID(),
+        key: "email",
+        label: "Email",
+        required: true,
+        type: "email",
+        width: "half",
+      },
+    ],
+    settings: {
+      submitLabel: "Register",
+      successTitle: "Registered",
+      successMessage: "See you there.",
+    },
+  });
+
+  const addMember = async (
+    userId: string,
+    role: "owner" | "editor" | "viewer",
+  ) => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({ name: "Target", slug: `target-${crypto.randomUUID()}` })
+      .returning({ id: workspaces.id, slug: workspaces.slug });
+    if (!workspace) throw new Error("Could not seed target workspace");
+    await db.insert(memberships).values({
+      role,
+      userId,
+      workspaceId: workspace.id,
+    });
+    return workspace;
+  };
+
+  const exportedDraft = async () => {
+    const { user, workspace } = await seedWorkspace();
+    const created = await createForm(workspace.slug, "Workshop signup");
+    const publishedSchema = { ...templateSchema(), title: "Published copy" };
+    const published = await publishForm(workspace.slug, created.id, {
+      expectedRevision: created.updatedAt.toISOString(),
+      schema: publishedSchema,
+    });
+    const draft = templateSchema();
+    const saved = await saveDraft(workspace.slug, created.id, {
+      expectedRevision: published.draftRevision,
+      schema: draft,
+    });
+    return { created, draft, publishedSchema, saved, user, workspace };
+  };
+
+  test("exports the saved draft as a template without instance data", async () => {
+    const { created, draft, saved, user, workspace } = await exportedDraft();
+    const [form] = await db
+      .select()
+      .from(forms)
+      .where(eq(forms.id, created.id));
+    if (!form) throw new Error("Missing form");
+    await updateFormPolicy(workspace.slug, created.id, {
+      expectedRevision: form.policyUpdatedAt.toISOString(),
+      policy: {
+        collectMetadata: true,
+        paused: true,
+        closesAt: null,
+        maxAccepted: 5,
+        closedMessage: "Private closed message",
+      },
+    });
+    const endpoint = await createWebhookEndpoint(workspace.slug, created.id, {
+      name: "Private receiver",
+      url: "https://private-receiver.example.org/hook",
+    });
+    if (!form.publishedVersionId) throw new Error("Missing published version");
+    await db.insert(submissions).values({
+      formId: created.id,
+      formVersionId: form.publishedVersionId,
+      idempotencyKey: "template-export",
+      normalizedValues: { email: "respondent@example.org" },
+      receivedValues: { email: "respondent@example.org" },
+      utm: {},
+    });
+
+    const exported = await exportFormTemplate(
+      workspace.slug,
+      created.id,
+      saved.updatedAt.toISOString(),
+    );
+    expect(exported.fileName).toBe("workshop-signup.form-template.json");
+    const file = JSON.parse(exported.body);
+    expect(file).toEqual({
+      format: "form-forge.form-template",
+      formatVersion: 1,
+      form: draft,
+    });
+    expect(file.form.title).not.toBe("Published copy");
+    for (const instanceValue of [
+      created.id,
+      created.slug,
+      workspace.id,
+      workspace.slug,
+      user.id,
+      form.publishedVersionId,
+      "Private closed message",
+      "Private receiver",
+      "private-receiver.example.org",
+      endpoint.secret,
+      "respondent@example.org",
+    ]) {
+      expect(exported.body).not.toContain(instanceValue);
+    }
+
+    await expect(
+      exportFormTemplate(
+        workspace.slug,
+        created.id,
+        created.updatedAt.toISOString(),
+      ),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    await db
+      .update(memberships)
+      .set({ role: "viewer" })
+      .where(eq(memberships.userId, user.id));
+    await expect(
+      exportFormTemplate(
+        workspace.slug,
+        created.id,
+        saved.updatedAt.toISOString(),
+      ),
+    ).resolves.toMatchObject({ body: exported.body });
+    const outsider = await seedWorkspace();
+    await expect(
+      exportFormTemplate(
+        workspace.slug,
+        created.id,
+        saved.updatedAt.toISOString(),
+      ),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      exportFormTemplate(
+        outsider.workspace.slug,
+        created.id,
+        saved.updatedAt.toISOString(),
+      ),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  test("imports a template as a separate unpublished draft in the target workspace", async () => {
+    const { created, draft, saved, user, workspace } = await exportedDraft();
+    const { body } = await exportFormTemplate(
+      workspace.slug,
+      created.id,
+      saved.updatedAt.toISOString(),
+    );
+    const target = await addMember(user.id, "editor");
+    const preview = await previewFormTemplate(target.slug, body);
+    expect(preview).toMatchObject({
+      formatVersion: 1,
+      schemaVersion: 1,
+      title: "Workshop signup",
+      nameInUse: false,
+      workspace: { slug: target.slug },
+      fields: [
+        { key: "session", optionCount: 3, required: true, visibleWhen: null },
+        { key: "dietary_needs", optionCount: null, visibleWhen: "Session" },
+        { key: "email", required: true },
+      ],
+    });
+    const outboxBefore = await db.select().from(outboxEvents);
+
+    const imported = await importFormTemplate(
+      target.slug,
+      body,
+      preview.digest,
+    );
+    const again = await importFormTemplate(target.slug, body, preview.digest);
+    expect(again.id).not.toBe(imported.id);
+    const copies = await db
+      .select()
+      .from(forms)
+      .where(eq(forms.workspaceId, target.id));
+    expect(copies).toHaveLength(2);
+    for (const copy of copies) {
+      expect(copy.id).not.toBe(created.id);
+      expect(copy.slug).not.toBe(created.slug);
+      expect(copy).toMatchObject({
+        status: "draft",
+        publishedVersionId: null,
+        createdBy: user.id,
+        name: "Workshop signup",
+        collectMetadata: false,
+        paused: false,
+        maxAccepted: null,
+        acceptedCount: 0,
+        draftSchema: draft,
+      });
+      await expect(getPublishedForm(copy.slug)).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    }
+    expect(new Set(copies.map((copy) => copy.slug)).size).toBe(2);
+    expect(
+      await db
+        .select()
+        .from(formVersions)
+        .where(
+          inArray(
+            formVersions.formId,
+            copies.map((copy) => copy.id),
+          ),
+        ),
+    ).toHaveLength(0);
+    expect(await db.select().from(outboxEvents)).toEqual(outboxBefore);
+    expect(
+      await db
+        .select({ action: auditLogs.action, metadata: auditLogs.metadata })
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.workspaceId, target.id),
+            eq(auditLogs.resourceId, imported.id),
+          ),
+        ),
+    ).toEqual([
+      {
+        action: "form.created",
+        metadata: {
+          fieldCount: 3,
+          name: "Workshop signup",
+          source: "template",
+          templateFormatVersion: 1,
+        },
+      },
+    ]);
+    const [source] = await db
+      .select({ draftSchema: forms.draftSchema, updatedAt: forms.updatedAt })
+      .from(forms)
+      .where(eq(forms.id, created.id));
+    expect(source).toEqual({ draftSchema: draft, updatedAt: saved.updatedAt });
+
+    const [conflicting] = copies;
+    if (!conflicting) throw new Error("Missing imported form");
+    expect((await previewFormTemplate(target.slug, body)).nameInUse).toBe(true);
+    const third = await importFormTemplate(target.slug, body, preview.digest);
+    expect(third.slug).not.toBe(conflicting.slug);
+    const [unchanged] = await db
+      .select({ draftSchema: forms.draftSchema, updatedAt: forms.updatedAt })
+      .from(forms)
+      .where(eq(forms.id, conflicting.id));
+    expect(unchanged).toEqual({
+      draftSchema: conflicting.draftSchema,
+      updatedAt: conflicting.updatedAt,
+    });
+  });
+
+  test("rejects unsupported, corrupted and inconsistent templates before writing", async () => {
+    const { workspace } = await seedWorkspace("editor");
+    const valid = {
+      format: "form-forge.form-template",
+      formatVersion: 1,
+      form: templateSchema(),
+    };
+    const [select, conditional, email] = valid.form.fields;
+    if (!select || !conditional || !email) throw new Error("Missing fields");
+    const cases: [string, string, number][] = [
+      ["{ not json", "not valid JSON", 400],
+      [
+        JSON.stringify({ ...valid, formatVersion: 2 }),
+        "Template format version 2",
+        422,
+      ],
+      [
+        JSON.stringify({ ...valid, form: { ...valid.form, schemaVersion: 3 } }),
+        "Form schema version 3",
+        422,
+      ],
+      [JSON.stringify({ ...valid, format: "other" }), "not a Form Forge", 422],
+      [
+        JSON.stringify({
+          ...valid,
+          form: {
+            ...valid.form,
+            fields: [
+              select,
+              {
+                ...conditional,
+                visibility: { fieldKey: "deleted", operator: "isEmpty" },
+              },
+            ],
+          },
+        }),
+        "form.fields.1.visibility.fieldKey",
+        422,
+      ],
+      [
+        JSON.stringify({
+          ...valid,
+          form: {
+            ...valid.form,
+            fields: [
+              {
+                ...conditional,
+                visibility: {
+                  fieldKey: "session",
+                  operator: "equals",
+                  value: "evening",
+                },
+              },
+              select,
+            ],
+          },
+        }),
+        "form.fields.0.visibility.fieldKey",
+        422,
+      ],
+      [
+        JSON.stringify({
+          ...valid,
+          form: {
+            ...valid.form,
+            fields: [select, { ...email, id: select.id }],
+          },
+        }),
+        "Field identifiers must be unique",
+        422,
+      ],
+      [JSON.stringify({ ...valid, submissions: [] }), "submissions", 422],
+    ];
+    const formsBefore = await db.select().from(forms);
+    const auditBefore = await db.select().from(auditLogs);
+    for (const [raw, expected, status] of cases) {
+      const digest = createHash("sha256").update(raw).digest("hex");
+      for (const attempt of [
+        () => previewFormTemplate(workspace.slug, raw),
+        () => importFormTemplate(workspace.slug, raw, digest),
+      ]) {
+        const error = await attempt().then(
+          () => undefined,
+          (caught: unknown) => caught,
+        );
+        expect(error).toBeInstanceOf(AppError);
+        if (!(error instanceof AppError)) continue;
+        expect(error.status).toBe(status);
+        expect(
+          `${error.message} ${JSON.stringify(error.fieldErrors ?? {})}`,
+        ).toContain(expected);
+      }
+    }
+    const raw = JSON.stringify(valid);
+    await expect(
+      importFormTemplate(workspace.slug, raw, null),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      importFormTemplate(workspace.slug, raw, "0".repeat(64)),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await db.select().from(forms)).toEqual(formsBefore);
+    expect(await db.select().from(auditLogs)).toEqual(auditBefore);
+  });
+
+  test("template routes enforce target access and the size limit before parsing", async () => {
+    const { created, saved, user, workspace } = await exportedDraft();
+    const { body } = await exportFormTemplate(
+      workspace.slug,
+      created.id,
+      saved.updatedAt.toISOString(),
+    );
+    const digest = createHash("sha256").update(body).digest("hex");
+    const viewerTarget = await addMember(user.id, "viewer");
+    const post = (
+      route: (
+        request: Request,
+        context: { params: Promise<{ workspaceSlug: string }> },
+      ) => Promise<Response>,
+      slug: string,
+      content: string,
+      query = "",
+    ) =>
+      route(
+        new Request(
+          `http://localhost/api/admin/workspaces/${slug}/forms/import${query}`,
+          { method: "POST", body: content },
+        ),
+        { params: Promise.resolve({ workspaceSlug: slug }) },
+      );
+
+    for (const route of [previewRoute, importRoute]) {
+      expect(
+        (await post(route, viewerTarget.slug, body, `?digest=${digest}`))
+          .status,
+      ).toBe(403);
+    }
+    const outsider = await seedWorkspace();
+    expect(
+      (await post(importRoute, workspace.slug, body, `?digest=${digest}`))
+        .status,
+    ).toBe(404);
+    auth.userId = user.id;
+    const editorTarget = await addMember(user.id, "editor");
+    const oversized = `{"padding":"${"x".repeat(MAX_FORM_TEMPLATE_BYTES)}"}`;
+    for (const route of [previewRoute, importRoute]) {
+      const response = await post(route, editorTarget.slug, oversized);
+      expect(response.status).toBe(413);
+    }
+    const preview = await post(previewRoute, editorTarget.slug, body);
+    expect(preview.status).toBe(200);
+    const imported = await post(
+      importRoute,
+      editorTarget.slug,
+      body,
+      `?digest=${((await preview.json()) as { data: { digest: string } }).data.digest}`,
+    );
+    expect(imported.status).toBe(201);
+    const exportResponse = await exportRoute(
+      new Request(
+        `http://localhost/api/admin/workspaces/${workspace.slug}/forms/${created.id}/template?revision=${encodeURIComponent(saved.updatedAt.toISOString())}`,
+      ),
+      {
+        params: Promise.resolve({
+          formId: created.id,
+          workspaceSlug: workspace.slug,
+        }),
+      },
+    );
+    expect(exportResponse.headers.get("Content-Disposition")).toBe(
+      'attachment; filename="workshop-signup.form-template.json"',
+    );
+    expect(await exportResponse.text()).toBe(body);
+    auth.userId = outsider.user.id;
+    expect(
+      (
+        await exportRoute(
+          new Request(
+            `http://localhost/api/admin/workspaces/${workspace.slug}/forms/${created.id}/template?revision=${encodeURIComponent(saved.updatedAt.toISOString())}`,
+          ),
+          {
+            params: Promise.resolve({
+              formId: created.id,
+              workspaceSlug: workspace.slug,
+            }),
+          },
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      await db
+        .select()
+        .from(forms)
+        .where(eq(forms.workspaceId, viewerTarget.id)),
+    ).toHaveLength(0);
   });
 });
 

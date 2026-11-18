@@ -15,6 +15,7 @@ import {
 import { ClientApiError, readApiData } from "@/lib/client-api";
 import { ArchiveFormButton } from "./archive-form-button";
 import { EditorHeader } from "./editor-header";
+import { ExportTemplateButton } from "./export-template-button";
 import { FieldsEditor } from "./fields-editor";
 import { FormSettings } from "./form-settings";
 import { PreviewErrorBoundary } from "./preview-error-boundary";
@@ -220,6 +221,13 @@ export const SchemaEditor = ({
     }
   });
   const mutationError = saveMutation.error ?? publishMutation.error;
+  const canSave =
+    canEdit &&
+    !restoring &&
+    !saveMutation.isPending &&
+    !publishMutation.isPending &&
+    hasUnsavedChanges &&
+    editorStatus.valid;
 
   return (
     <div>
@@ -233,15 +241,20 @@ export const SchemaEditor = ({
           editorStatus.valid &&
           editorStatus.changedSincePublish
         }
-        canSave={
-          canEdit &&
-          !restoring &&
-          !saveMutation.isPending &&
-          !publishMutation.isPending &&
-          hasUnsavedChanges &&
-          editorStatus.valid
-        }
+        canSave={canSave}
         dirty={hasUnsavedChanges}
+        exportButton={
+          <ExportTemplateButton
+            canSave={canSave}
+            dirty={hasUnsavedChanges}
+            disabled={restoring || publishMutation.isPending}
+            draftRevision={draftRevision}
+            formId={formId}
+            saving={saveMutation.isPending}
+            workspaceSlug={workspaceSlug}
+            onSave={() => void save()}
+          />
+        }
         form={form}
         formId={formId}
         publicSlug={publicSlug}

@@ -29,6 +29,19 @@ test("publishes reusable JSON Schemas and actual product routes without weakenin
           { secureSession: [] },
         ]);
   }
+  expect(spec.components.schemas.FormTemplate).toMatchObject({
+    additionalProperties: false,
+    properties: {
+      format: { const: "form-forge.form-template" },
+      formatVersion: { const: 1 },
+    },
+  });
+  expect(
+    spec.paths["/api/admin/workspaces/{workspaceSlug}/forms/import"].post
+      .parameters,
+  ).toContainEqual(
+    expect.objectContaining({ name: "digest", in: "query", required: true }),
+  );
   const list =
     spec.paths["/api/admin/workspaces/{workspaceSlug}/submissions"].get
       .parameters;

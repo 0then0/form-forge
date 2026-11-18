@@ -57,7 +57,7 @@ For production, use the [Docker Compose guide](deploy/README.md) or [Netlify gui
 Using Form Forge:
 
 - [Getting started](docs/getting-started.md): requirements, environment, database, OAuth and your first form.
-- [User guide](docs/user-guide.md): forms, sign-in methods, intake controls, privacy, responses and roles.
+- [User guide](docs/user-guide.md): forms, form templates, sign-in methods, intake controls, privacy, responses and roles.
 - [Public API, OpenAPI and MCP](docs/api.md): submission contract, idempotency, limits and integrations.
 - [Embedding](docs/embedding.md): iframe setup, automatic height and events.
 - [Webhooks](docs/webhooks.md): payload format, signature verification, retries and deduplication.

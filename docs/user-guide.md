@@ -19,6 +19,39 @@ always keep a reference to the version they were submitted against.
 
 The interface supports system, light and dark themes.
 
+## Form templates
+
+A form template is a JSON file that carries a form definition to another
+workspace or another Form Forge installation.
+
+To export, open the form and choose **Export → Download saved draft**. The file
+contains the current saved draft, not the published version. If the editor has
+unsaved changes, **Export** asks you to save them first. If another session saved
+the draft after you opened it, reload the editor before exporting.
+
+The file contains a format identifier, a format version and the form definition:
+title, description, fields in their order, select options in their order, field
+identifiers and keys, webhook keys, validation, conditional visibility, layout,
+submit label and success message. `formatVersion` describes the file and
+`form.schemaVersion` describes the definition; both must be supported by the
+installation that imports the file. A template never contains responses,
+respondent drafts, users, roles, intake and privacy settings, publication
+history, webhook endpoints or secrets.
+
+To import, open **Forms** in the target workspace and choose **Import**. Select a
+template file to see a summary of its definition, then choose **Create draft**.
+Choosing another file shows a new summary that you confirm again. Importing
+requires the editor or owner role, like creating a form.
+
+Each import creates a separate unpublished draft with its own address and the
+default intake settings for new forms. Importing the same file again creates
+another draft, and a form with the same name can exist alongside it; existing
+forms are never changed. Publish the draft when it is ready: the publish checks,
+such as requiring at least one field, apply at that point. The server rejects
+files larger than 16 MB, files that are not valid JSON, unsupported versions and
+definitions that fail the draft checks, for example conditional visibility that
+refers to a missing or later field. A rejected file creates nothing.
+
 ## Saving unfinished answers on a device
 
 Visitors to a hosted or embedded form can enable **Save answers on this device**.
@@ -205,11 +238,11 @@ does not delete responses or audit records automatically.
 
 - **Owner:** all actions, including deleting responses and managing webhook
   endpoints and members.
-- **Editor:** edit and publish forms, change intake and privacy settings, restore
-  drafts, view and export responses, mark responses new or processed, and retry
+- **Editor:** edit, publish and import forms, change intake and privacy
+  settings, restore drafts, view and export responses, mark responses new or processed, and retry
   failed deliveries.
 - **Viewer:** read-only access to forms, versions, responses and deliveries,
-  including CSV export.
+  including CSV export and form template export.
 
 The server checks workspace membership and role for every administrative action.
 Your first sign-in creates a personal workspace. To add a member by email, that

@@ -6,6 +6,7 @@ import { canEdit, requireWorkspace } from "@/auth/permissions";
 import { CreateFormButton } from "@/components/create-form-button";
 import { LocalDateTime } from "@/components/local-date-time";
 import { FormListActions } from "@/components/form-list-actions";
+import { ImportTemplateButton } from "@/components/import-template-button";
 import { listArchivedForms, listActiveForms } from "@/services/forms";
 
 export default async function FormsPage({
@@ -33,10 +34,17 @@ export default async function FormsPage({
             Draft, publish, and inspect immutable schema versions.
           </p>
         </div>
-        <CreateFormButton
-          disabled={!canEdit(workspace.role)}
-          workspaceSlug={workspaceSlug}
-        />
+        <div className="flex flex-wrap gap-2">
+          <ImportTemplateButton
+            disabled={!canEdit(workspace.role)}
+            workspaceName={workspace.name}
+            workspaceSlug={workspaceSlug}
+          />
+          <CreateFormButton
+            disabled={!canEdit(workspace.role)}
+            workspaceSlug={workspaceSlug}
+          />
+        </div>
       </div>
       <nav aria-label="Form status" className="mb-5 flex gap-2 text-sm">
         <Link

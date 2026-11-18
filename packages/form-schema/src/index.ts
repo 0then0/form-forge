@@ -17,6 +17,18 @@ export {
   normalizeSubmission,
   sanitizePartialAnswers,
 } from "./submission";
+export {
+  createFormTemplate,
+  FORM_TEMPLATE_FORMAT,
+  FORM_TEMPLATE_VERSION,
+  MAX_FORM_TEMPLATE_BYTES,
+  parseFormTemplate,
+} from "./template";
+export type {
+  FormTemplateIssue,
+  FormTemplateV1,
+  ParseFormTemplateResult,
+} from "./template";
 export { evaluateVisibilityRule, isFieldVisible } from "./visibility";
 export type {
   CheckboxField,

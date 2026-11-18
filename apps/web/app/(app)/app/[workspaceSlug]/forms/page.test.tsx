@@ -13,6 +13,9 @@ vi.mock("@/services/forms", () => mocks);
 vi.mock("@/components/create-form-button", () => ({
   CreateFormButton: () => <button type="button">New form</button>,
 }));
+vi.mock("@/components/import-template-button", () => ({
+  ImportTemplateButton: () => <button type="button">Import</button>,
+}));
 vi.mock("@/components/form-list-actions", () => ({
   FormListActions: () => null,
 }));

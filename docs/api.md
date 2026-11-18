@@ -116,7 +116,7 @@ disabled ones.
 
 `GET /api/openapi` returns an OpenAPI 3.1 document. It covers the public form and
 submit endpoints and the main administration operations: drafts and publishing,
-intake and privacy settings, response lists and filters, CSV export, processing
+form template export, preview and import, intake and privacy settings, response lists and filters, CSV export, processing
 status and response deletion. Request schemas are generated from the same Zod
 validators the server uses.
 

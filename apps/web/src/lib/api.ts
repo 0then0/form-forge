@@ -83,7 +83,8 @@ export const apiError = (
   );
 };
 
-export const parseJsonBody = async (request: Request, maxBytes = 65_536) => {
+// Enforces the byte limit while streaming, before any JSON parsing.
+export const readTextBody = async (request: Request, maxBytes: number) => {
   const contentLength = Number(request.headers.get("content-length") ?? "0");
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
     throw new AppError("BAD_REQUEST", "Request body is too large", 413);
@@ -106,7 +107,11 @@ export const parseJsonBody = async (request: Request, maxBytes = 65_536) => {
     }
     raw += decoder.decode();
   }
+  return raw;
+};
 
+export const parseJsonBody = async (request: Request, maxBytes = 65_536) => {
+  const raw = await readTextBody(request, maxBytes);
   try {
     return JSON.parse(raw) as unknown;
   } catch {

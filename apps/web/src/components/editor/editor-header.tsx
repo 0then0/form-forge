@@ -3,11 +3,13 @@
 import { Badge, Button } from "@form-forge/ui";
 import { Eye, Save, Send, Webhook } from "lucide-react";
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 export const EditorHeader = ({
   canPublish,
   canSave,
   dirty,
+  exportButton,
   formId,
   onPublish,
   onSave,
@@ -21,6 +23,7 @@ export const EditorHeader = ({
   canPublish: boolean;
   canSave: boolean;
   dirty: boolean;
+  exportButton: ReactNode;
   formId: string;
   onPublish: () => void;
   onSave: () => void;
@@ -55,6 +58,7 @@ export const EditorHeader = ({
           </a>
         </Button>
       ) : null}
+      {exportButton}
       <Button disabled={!canSave} variant="secondary" onClick={onSave}>
         <Save className="size-4" />
         {saving ? "Saving…" : "Save draft"}

@@ -7,6 +7,13 @@ release also includes detailed upgrade instructions.
 
 ## [Unreleased]
 
+### Added
+
+- Portable form templates: export a form's saved draft as a versioned JSON file
+  and import it as a new unpublished draft in another workspace or installation,
+  after a preview and confirmation. Templates contain only the form definition,
+  never responses, settings, members, webhooks or secrets.
+
 ## [0.3.0] - 2026-11-13
 
 ### Added
