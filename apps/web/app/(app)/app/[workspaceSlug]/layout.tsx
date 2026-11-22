@@ -82,7 +82,7 @@ export default async function WorkspaceLayout({
           </div>
         </div>
       </header>
-      <div className="mx-auto grid max-w-screen-2xl md:grid-cols-[220px_1fr]">
+      <div className="mx-auto grid max-w-screen-2xl grid-cols-1 md:grid-cols-[220px_1fr]">
         <aside className="border-b border-slate-200 bg-white p-3 md:min-h-[calc(100vh-4rem)] md:border-r md:border-b-0">
           <nav
             aria-label="Workspace"

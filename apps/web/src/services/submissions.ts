@@ -27,8 +27,12 @@ import {
   webhookEndpoints,
 } from "@/db/schema";
 import { AppError, notFoundError } from "@/lib/errors";
-import { submissionStatusMutationSchema } from "@/lib/submission-mutations";
 import {
+  markSubmissionsProcessedSchema,
+  submissionStatusMutationSchema,
+} from "@/lib/submission-mutations";
+import {
+  MAX_SUBMISSIONS_PAGE_SIZE,
   submissionFilterSchema,
   type SubmissionFilters,
 } from "@/lib/submission-filters";
@@ -36,37 +40,24 @@ import { z } from "zod";
 import { hashDeletedSubmissionKey } from "@/lib/deleted-submission-key";
 import { requireUuidParam } from "@/lib/route-params";
 
-type SubmissionCursor = { createdAt: Date; id: string };
+const submissionCursorSchema = z.object({
+  createdAt: z.iso.datetime({ offset: true }),
+  id: z.uuid(),
+});
+type SubmissionCursor = z.infer<typeof submissionCursorSchema>;
 
 const decodeCursor = (cursor: string): SubmissionCursor => {
   try {
-    const parsed = JSON.parse(
-      Buffer.from(cursor, "base64url").toString("utf8"),
-    ) as {
-      createdAt?: unknown;
-      id?: unknown;
-    };
-    const createdAt = new Date(String(parsed.createdAt));
-    if (
-      typeof parsed.id !== "string" ||
-      parsed.id.length === 0 ||
-      Number.isNaN(createdAt.getTime())
-    ) {
-      throw new Error("Invalid cursor shape");
-    }
-    return { createdAt, id: parsed.id };
+    return submissionCursorSchema.parse(
+      JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")),
+    );
   } catch {
     throw new AppError("BAD_REQUEST", "Invalid pagination cursor", 400);
   }
 };
 
-const encodeCursor = (cursor: SubmissionCursor): string =>
-  Buffer.from(
-    JSON.stringify({
-      createdAt: cursor.createdAt.toISOString(),
-      id: cursor.id,
-    }),
-  ).toString("base64url");
+const encodeCursor = ({ createdAt, id }: SubmissionCursor): string =>
+  Buffer.from(JSON.stringify({ createdAt, id })).toString("base64url");
 
 // Shared by the list and export. Only immutable values enter full-text search;
 // jsonb_to_tsvector excludes keys and uses PostgreSQL's built-in simple dictionary.
@@ -103,23 +94,22 @@ export const listSubmissions = async ({
   workspaceSlug: string;
 }) => {
   const workspace = await requireWorkspace(workspaceSlug);
-  limit = z.number().int().min(1).max(100).parse(limit);
+  limit = z.number().int().min(1).max(MAX_SUBMISSIONS_PAGE_SIZE).parse(limit);
   const conditions = submissionConditions(workspace.id, filters);
   if (cursor) {
     const decoded = decodeCursor(cursor);
+    const createdAt = sql`${decoded.createdAt}::timestamptz`;
     const paginationCondition = or(
-      lt(submissions.createdAt, decoded.createdAt),
-      and(
-        eq(submissions.createdAt, decoded.createdAt),
-        lt(submissions.id, decoded.id),
-      ),
+      lt(submissions.createdAt, createdAt),
+      and(eq(submissions.createdAt, createdAt), lt(submissions.id, decoded.id)),
     );
     if (paginationCondition) conditions.push(paginationCondition);
   }
 
   const rows = await db
     .select({
-      createdAt: submissions.createdAt,
+      // A JavaScript Date drops the microseconds needed for cursor comparisons.
+      createdAt: sql<string>`to_char(${submissions.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
       deliveryStatus: submissions.deliveryStatus,
       processingStatus: submissions.processingStatus,
       formId: forms.id,
@@ -133,17 +123,14 @@ export const listSubmissions = async ({
     .innerJoin(formVersions, eq(formVersions.id, submissions.formVersionId))
     .where(and(...conditions))
     .orderBy(desc(submissions.createdAt), desc(submissions.id))
-    .limit(Math.min(limit, 100) + 1);
+    .limit(limit + 1);
 
   const hasNextPage = rows.length > limit;
   const data = hasNextPage ? rows.slice(0, limit) : rows;
   const last = data.at(-1);
   return {
-    data,
-    nextCursor:
-      hasNextPage && last
-        ? encodeCursor({ createdAt: last.createdAt, id: last.id })
-        : null,
+    data: data.map((row) => ({ ...row, createdAt: new Date(row.createdAt) })),
+    nextCursor: hasNextPage && last ? encodeCursor(last) : null,
   };
 };
 
@@ -500,6 +487,19 @@ export const deleteSubmission = async (
   }
 };
 
+const submissionStatusAudit = (
+  workspace: Awaited<ReturnType<typeof requireWorkspace>>,
+  submissionId: string,
+  processingStatus: typeof submissions.$inferSelect.processingStatus,
+) => ({
+  action: "submission.status_updated",
+  actorId: workspace.user.id,
+  workspaceId: workspace.id,
+  resourceType: "submission",
+  resourceId: submissionId,
+  metadata: { processingStatus },
+});
+
 export const updateSubmissionStatus = async (
   workspaceSlug: string,
   submissionId: string,
@@ -529,14 +529,60 @@ export const updateSubmissionStatus = async (
         processingStatus: submissions.processingStatus,
       });
     if (!updated) throw notFoundError("Submission not found");
-    await tx.insert(auditLogs).values({
-      action: "submission.status_updated",
-      actorId: workspace.user.id,
-      workspaceId: workspace.id,
-      resourceType: "submission",
-      resourceId: id,
-      metadata: { processingStatus },
-    });
+    await tx
+      .insert(auditLogs)
+      .values(submissionStatusAudit(workspace, id, processingStatus));
     return updated;
+  });
+};
+
+export const markSubmissionsProcessed = async (
+  workspaceSlug: string,
+  input: unknown,
+) => {
+  const workspace = await requireWorkspace(workspaceSlug, "editor");
+  const { formId, submissionIds } = markSubmissionsProcessedSchema.parse(input);
+  return db.transaction(async (tx) => {
+    // Lock the entire selection in ID order so overlapping batches and deletes
+    // cannot change which submissions are available during this transaction.
+    const selected = await tx
+      .select({ id: submissions.id })
+      .from(submissions)
+      .innerJoin(forms, eq(forms.id, submissions.formId))
+      .where(
+        and(
+          eq(forms.workspaceId, workspace.id),
+          eq(submissions.formId, formId),
+          inArray(submissions.id, submissionIds),
+        ),
+      )
+      .orderBy(submissions.id)
+      .for("update", { of: submissions });
+    if (selected.length !== submissionIds.length)
+      throw new AppError(
+        "CONFLICT",
+        "The submissions list has changed. Review your selection and try again.",
+        409,
+      );
+
+    const updated = await tx
+      .update(submissions)
+      .set({ processingStatus: "processed" })
+      .where(
+        and(
+          inArray(submissions.id, submissionIds),
+          eq(submissions.processingStatus, "new"),
+        ),
+      )
+      .returning({ id: submissions.id });
+    if (updated.length > 0)
+      await tx
+        .insert(auditLogs)
+        .values(
+          updated.map(({ id }) =>
+            submissionStatusAudit(workspace, id, "processed"),
+          ),
+        );
+    return { updatedCount: updated.length };
   });
 };

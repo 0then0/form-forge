@@ -514,6 +514,110 @@ test("manages intake, private metadata, processing, columns, filtered CSV and co
   await oldTab.close();
 });
 
+test("marks selected New responses on one page and recovers when a selection is deleted", async ({
+  page,
+}) => {
+  test.slow();
+  const { form, versionId } = await createPublishedFixture(page);
+  const responses = await pool.query<{ id: string; idempotency_key: string }>(
+    `insert into submissions
+       (form_id, form_version_id, received_values, normalized_values, utm, idempotency_key, created_at)
+     select $1, $2, answer, answer, '{}', 'batch-' || n,
+       timestamptz '2026-10-10 00:00:00+00' + n * interval '1 microsecond'
+     from generate_series(1, 27) as n
+     cross join lateral (select jsonb_build_object('name', 'Response ' || n) as answer) fixture
+     returning id, idempotency_key`,
+    [form.id, versionId],
+  );
+  const idFor = (n: number) => {
+    const row = responses.rows.find(
+      (response) => response.idempotency_key === `batch-${n}`,
+    );
+    if (!row) throw new Error(`Missing fixture response ${n}`);
+    return row.id;
+  };
+  const listPath = `/api/admin/workspaces/${workspaceSlug}/submissions`;
+  const checkbox = (n: number) =>
+    page.getByRole("checkbox", {
+      name: `Select response ${idFor(n)}`,
+      exact: true,
+    });
+  const markSelected = async (count: number) => {
+    const result = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith(`${listPath}/mark-processed`),
+    );
+    await page
+      .getByRole("button", {
+        name: `Mark as processed (${count})`,
+        exact: true,
+      })
+      .click();
+    return result;
+  };
+  const processedKeys = async () =>
+    (
+      await pool.query<{ idempotency_key: string }>(
+        "select idempotency_key from submissions where form_id = $1 and processing_status = 'processed' order by idempotency_key",
+        [form.id],
+      )
+    ).rows.map((row) => row.idempotency_key);
+
+  await page.goto(`/app/${workspaceSlug}/submissions`);
+  await page.getByLabel("Filter by form").selectOption(form.id);
+  const processing = page.getByLabel("Filter by processing status");
+  await processing.selectOption("new");
+  await checkbox(27).check();
+  await expect(
+    page.getByRole("button", { name: "Mark as processed (1)" }),
+  ).toBeEnabled();
+  await page.setViewportSize({ width: 320, height: 900 });
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(320);
+  await page.getByRole("button", { name: "Next page" }).click();
+  await expect(checkbox(27)).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Mark as processed (0)" }),
+  ).toBeDisabled();
+
+  await checkbox(2).press("Space");
+  await expect(checkbox(2)).toBeChecked();
+  expect((await markSelected(1)).status()).toBe(200);
+  await expect(checkbox(2)).toHaveCount(0);
+  await expect(checkbox(1)).toBeVisible();
+  await expect(processing).toHaveValue("new");
+  expect(await processedKeys()).toEqual(["batch-2"]);
+
+  await page
+    .getByRole("checkbox", { name: "Select this page", exact: true })
+    .check();
+  expect((await markSelected(1)).status()).toBe(200);
+  await expect(checkbox(27)).toBeVisible();
+  await expect(checkbox(27)).not.toBeChecked();
+  await expect(checkbox(1)).toHaveCount(0);
+  await expect(processing).toHaveValue("new");
+  expect(await processedKeys()).toEqual(["batch-1", "batch-2"]);
+
+  await checkbox(27).check();
+  await checkbox(26).check();
+  const deletedId = idFor(26);
+  const deletion = await page.request.delete(`${listPath}/${deletedId}`, {
+    data: { confirmation: deletedId },
+  });
+  expect(deletion.status()).toBe(200);
+  expect((await markSelected(2)).status()).toBe(409);
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: /list has changed.+review your selection/i }),
+  ).toBeVisible();
+  await expect(checkbox(26)).toHaveCount(0);
+  await expect(checkbox(27)).not.toBeChecked();
+  expect(await processedKeys()).toEqual(["batch-1", "batch-2"]);
+});
+
 test("auto-resizes multiple cross-origin embeds and ignores forged messages while preserving plain iframes", async ({
   page,
 }) => {

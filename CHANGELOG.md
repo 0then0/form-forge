@@ -7,6 +7,11 @@ release also includes detailed upgrade instructions.
 
 ## [Unreleased]
 
+### Added
+
+- Editors and owners can mark selected responses from one form on the current
+  Submissions page as processed in a single action.
+
 ## [0.4.0] - 2026-11-18
 
 ### Added

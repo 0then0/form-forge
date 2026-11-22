@@ -36,6 +36,7 @@ import { POST as submitRoute } from "../../app/api/forms/[slug]/submit/route";
 import { GET as exportRoute } from "../../app/api/admin/workspaces/[workspaceSlug]/forms/[formId]/template/route";
 import { POST as importRoute } from "../../app/api/admin/workspaces/[workspaceSlug]/forms/import/route";
 import { POST as previewRoute } from "../../app/api/admin/workspaces/[workspaceSlug]/forms/import/preview/route";
+import { POST as markProcessedRoute } from "../../app/api/admin/workspaces/[workspaceSlug]/submissions/mark-processed/route";
 import { inngest } from "@/inngest/client";
 import { db } from "@/db/client";
 import {
@@ -56,6 +57,7 @@ import {
 } from "@/db/schema";
 import { encryptWebhookSecret } from "@/integration/webhooks/crypto";
 import { AppError } from "@/lib/errors";
+import { MAX_SUBMISSIONS_PAGE_SIZE } from "@/lib/submission-filters";
 import {
   createDeliveriesForSubmission,
   deliverWebhook,
@@ -206,6 +208,31 @@ const seedForm = async ({
     .where(eq(forms.id, form.id));
   return { form, schema: formSchema, version };
 };
+
+const receiveNamedResponse = async (
+  seeded: Awaited<ReturnType<typeof seedForm>>,
+  name: string,
+) => {
+  if (!seeded.version) throw new Error("Missing version");
+  return receiveSubmission({
+    slug: seeded.form.slug,
+    idempotencyKey: name,
+    input: { versionId: seeded.version.id, values: { name } },
+  });
+};
+
+const postProcessingBatch = (workspaceSlug: string, data: unknown) =>
+  markProcessedRoute(
+    new Request(
+      `http://localhost/api/admin/workspaces/${workspaceSlug}/submissions/mark-processed`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      },
+    ),
+    { params: Promise.resolve({ workspaceSlug }) },
+  );
 
 integration("submission and delivery pipeline", () => {
   beforeAll(async () => {
@@ -3075,6 +3102,228 @@ integration("submission and delivery pipeline", () => {
     expect(
       (await listSubmissions({ workspaceSlug: other.workspace.slug })).data,
     ).toHaveLength(0);
+  });
+
+  test("batch processing rejects unauthorized, invalid and unavailable selections without partial writes", async () => {
+    const { user, workspace } = await seedWorkspace("viewer");
+    const fixture = { userId: user.id, workspaceId: workspace.id };
+    const seeded = await seedForm(fixture);
+    const otherForm = await seedForm(fixture);
+    const foreign = await seedWorkspace();
+    const foreignForm = await seedForm({
+      userId: foreign.user.id,
+      workspaceId: foreign.workspace.id,
+    });
+    const kept = await receiveNamedResponse(seeded, "Keep");
+    const removed = await receiveNamedResponse(seeded, "Delete");
+    const wrongForm = await receiveNamedResponse(otherForm, "Other form");
+    const wrongWorkspace = await receiveNamedResponse(
+      foreignForm,
+      "Other workspace",
+    );
+
+    auth.userId = user.id;
+    const post = (submissionIds: string[], formId = seeded.form.id) =>
+      postProcessingBatch(workspace.slug, { formId, submissionIds });
+    expect((await post([kept.id, removed.id])).status).toBe(403);
+    await db
+      .update(memberships)
+      .set({ role: "owner" })
+      .where(eq(memberships.userId, user.id));
+
+    const oversize = [
+      kept.id,
+      ...Array.from({ length: MAX_SUBMISSIONS_PAGE_SIZE }, () =>
+        crypto.randomUUID(),
+      ),
+    ];
+    for (const invalid of [
+      [],
+      [kept.id, "invalid"],
+      [kept.id, kept.id.toUpperCase()],
+      oversize,
+    ]) {
+      expect((await post(invalid)).status).toBe(422);
+    }
+
+    const unavailable = async (response: Response) => {
+      expect(response.status).toBe(409);
+      const { error } = await response.json();
+      return { code: error.code, message: error.message };
+    };
+    const missing = await unavailable(
+      await post([kept.id, crypto.randomUUID()]),
+    );
+    expect(missing.code).toBe("CONFLICT");
+    expect(await unavailable(await post([kept.id, wrongForm.id]))).toEqual(
+      missing,
+    );
+    expect(await unavailable(await post([kept.id, wrongWorkspace.id]))).toEqual(
+      missing,
+    );
+    expect(
+      await unavailable(await post([wrongWorkspace.id], foreignForm.form.id)),
+    ).toEqual(missing);
+    expect(
+      (await db.select().from(submissions)).map((row) => row.processingStatus),
+    ).toEqual(["new", "new", "new", "new"]);
+    expect(await db.select().from(auditLogs)).toHaveLength(0);
+
+    await deleteSubmission(workspace.slug, removed.id, removed.id);
+    const auditAfterDeletion = await db.select().from(auditLogs);
+    expect(await unavailable(await post([kept.id, removed.id]))).toEqual(
+      missing,
+    );
+    expect(
+      (await db.select().from(submissions)).map((row) => row.processingStatus),
+    ).toEqual(["new", "new", "new"]);
+    expect(await db.select().from(auditLogs)).toEqual(auditAfterDeletion);
+  });
+
+  test("overlapping batches audit only actual processing changes and preserve response and delivery data", async () => {
+    const { user, workspace } = await seedWorkspace("editor");
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    const first = await receiveNamedResponse(seeded, "First");
+    const second = await receiveNamedResponse(seeded, "Second");
+    const processed = await receiveNamedResponse(seeded, "Already processed");
+    await receiveNamedResponse(seeded, "Unselected");
+    await updateSubmissionStatus(workspace.slug, processed.id, {
+      processingStatus: "processed",
+    });
+    await db.insert(webhookEndpoints).values({
+      formId: seeded.form.id,
+      name: "Primary",
+      secretCiphertext: encryptWebhookSecret("integration-webhook-secret"),
+      url: "https://hooks.example.com/form-forge",
+    });
+    await createDeliveriesForSubmission(first.id);
+
+    const responsesBefore = await db
+      .select()
+      .from(submissions)
+      .orderBy(submissions.id);
+    const versionsBefore = await db.select().from(formVersions);
+    const outboxBefore = await db
+      .select()
+      .from(outboxEvents)
+      .orderBy(outboxEvents.id);
+    const deliveriesBefore = await db.select().from(webhookDeliveries);
+    const auditBefore = await db.select().from(auditLogs);
+    expect(outboxBefore.length).toBeGreaterThan(0);
+    expect(deliveriesBefore).toHaveLength(1);
+
+    const changedIds = [first.id, second.id];
+    const results = await Promise.all(
+      [
+        [...changedIds, processed.id],
+        [processed.id, second.id, first.id],
+      ].map((submissionIds) =>
+        postProcessingBatch(workspace.slug, {
+          formId: seeded.form.id,
+          submissionIds,
+        }),
+      ),
+    );
+    expect(results.map((response) => response.status)).toEqual([200, 200]);
+    const bodies = await Promise.all(
+      results.map((response) => response.json()),
+    );
+    expect(bodies).toEqual(
+      expect.arrayContaining([
+        { data: { updatedCount: 0 } },
+        { data: { updatedCount: 2 } },
+      ]),
+    );
+    expect(await db.select().from(submissions).orderBy(submissions.id)).toEqual(
+      responsesBefore.map((row) =>
+        changedIds.includes(row.id)
+          ? { ...row, processingStatus: "processed" }
+          : row,
+      ),
+    );
+    expect(await db.select().from(formVersions)).toEqual(versionsBefore);
+    expect(
+      await db.select().from(outboxEvents).orderBy(outboxEvents.id),
+    ).toEqual(outboxBefore);
+    expect(await db.select().from(webhookDeliveries)).toEqual(deliveriesBefore);
+
+    const audits = await db.select().from(auditLogs);
+    expect(audits).toHaveLength(auditBefore.length + changedIds.length);
+    expect(audits).toEqual(
+      expect.arrayContaining([
+        ...auditBefore,
+        ...changedIds.map((resourceId) =>
+          expect.objectContaining({
+            action: "submission.status_updated",
+            actorId: user.id,
+            workspaceId: workspace.id,
+            resourceType: "submission",
+            resourceId,
+            metadata: { processingStatus: "processed" },
+          }),
+        ),
+      ]),
+    );
+  });
+
+  test("submission cursors retain microseconds and break timestamp ties by ID", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const seeded = await seedForm({
+      userId: user.id,
+      workspaceId: workspace.id,
+    });
+    const anchor = await receiveNamedResponse(seeded, "Anchor");
+    const first = await receiveNamedResponse(seeded, "First");
+    const second = await receiveNamedResponse(seeded, "Second");
+    const third = await receiveNamedResponse(seeded, "Third");
+    const anchorTime = new Date("2026-10-01T12:00:00.124Z");
+    await db
+      .update(submissions)
+      .set({ createdAt: anchorTime })
+      .where(eq(submissions.id, anchor.id));
+    await db
+      .update(submissions)
+      .set({ createdAt: sql`'2026-10-01T12:00:00.123456Z'::timestamptz` })
+      .where(inArray(submissions.id, [first.id, second.id]));
+    await db
+      .update(submissions)
+      .set({ createdAt: sql`'2026-10-01T12:00:00.123455Z'::timestamptz` })
+      .where(eq(submissions.id, third.id));
+
+    const tied = [first.id, second.id].sort().reverse();
+    const filters = {
+      workspaceSlug: workspace.slug,
+      limit: 1,
+      processingStatus: "new" as const,
+    };
+    const initial = await listSubmissions(filters);
+    expect(initial.data).toMatchObject([
+      { id: anchor.id, createdAt: anchorTime },
+    ]);
+    let page = await listSubmissions({
+      ...filters,
+      cursor: initial.nextCursor ?? undefined,
+    });
+    const legacyCursor = Buffer.from(
+      JSON.stringify({ createdAt: anchorTime.toISOString(), id: anchor.id }),
+    ).toString("base64url");
+    expect(await listSubmissions({ ...filters, cursor: legacyCursor })).toEqual(
+      page,
+    );
+    for (const id of tied) {
+      expect(page.data).toMatchObject([
+        { id, createdAt: new Date("2026-10-01T12:00:00.123Z") },
+      ]);
+      page = await listSubmissions({
+        ...filters,
+        cursor: page.nextCursor ?? undefined,
+      });
+    }
+    expect(page.data.map(({ id }) => id)).toEqual([third.id]);
+    expect(page.nextCursor).toBeNull();
   });
 
   test("date, text and processing filters select the same bounded rows in the list and CSV", async () => {

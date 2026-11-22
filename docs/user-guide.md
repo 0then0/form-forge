@@ -178,12 +178,10 @@ saved. Local saving provides no account, cross-device sync or transfer link.
 
 ## Responses
 
-The **Submissions** page lists responses with cursor pagination, up to 100 per
-page. You can filter by:
-
-- date, with an inclusive start and exclusive end, in UTC;
-- processing status, new or processed;
-- answer text.
+The **Submissions** page lists responses one page at a time. Use **Previous
+page** and **Next page** to move through the results. You can filter by form,
+delivery status, date, processing status (new or processed) and answer text. The
+date range uses UTC with an inclusive start and exclusive end.
 
 Answer search is case-insensitive, accepts 2 to 100 characters and matches whole
 words in answer values, including numbers and booleans, but not field keys. It
@@ -196,6 +194,16 @@ form name always stays visible.
 Editors and owners can mark a response as new or processed. This status is
 independent of delivery status and never changes the submitted values or the
 version the response belongs to.
+
+To mark several responses as processed, select rows from one form on the
+current page, then click **Mark as processed**. The button shows how many
+responses are selected. **Select this page** is available when all displayed
+rows belong to one form. Changing the form, filters or page clears the
+selection.
+
+With the **New** filter active, marked responses disappear from the list. If
+any selected response is no longer available, Form Forge cancels the entire
+batch and refreshes the list so you can review your selection.
 
 ### CSV export
 

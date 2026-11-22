@@ -1,3 +1,4 @@
+import { canEdit, requireWorkspace } from "@/auth/permissions";
 import { SubmissionsTable } from "@/components/submissions/submissions-table";
 import { listActiveForms } from "@/services/forms";
 
@@ -7,7 +8,10 @@ export default async function SubmissionsPage({
   params: Promise<{ workspaceSlug: string }>;
 }) {
   const { workspaceSlug } = await params;
-  const forms = await listActiveForms(workspaceSlug);
+  const [workspace, forms] = await Promise.all([
+    requireWorkspace(workspaceSlug),
+    listActiveForms(workspaceSlug),
+  ]);
   return (
     <div>
       <div className="mb-6">
@@ -17,6 +21,8 @@ export default async function SubmissionsPage({
         </p>
       </div>
       <SubmissionsTable
+        key={workspaceSlug}
+        canEdit={canEdit(workspace.role)}
         forms={forms.map((form) => ({ id: form.id, name: form.name }))}
         workspaceSlug={workspaceSlug}
       />

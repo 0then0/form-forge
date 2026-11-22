@@ -7,10 +7,12 @@ import {
 import { z } from "zod";
 import { formPolicyMutationSchema } from "./form-policy";
 import {
+  MAX_SUBMISSIONS_PAGE_SIZE,
   submissionListQuerySchema,
   submissionFilterSchema,
 } from "./submission-filters";
 import {
+  markSubmissionsProcessedSchema,
   submissionDeletionSchema,
   submissionStatusMutationSchema,
 } from "./submission-mutations";
@@ -166,6 +168,7 @@ export const openApiDocument = {
       SubmissionRequest: schema(submissionRequestSchema),
       FormPolicyMutation: schema(formPolicyMutationSchema),
       StatusMutation: schema(submissionStatusMutationSchema),
+      MarkSubmissionsProcessed: schema(markSubmissionsProcessedSchema),
       SubmissionDeletion: schema(submissionDeletionSchema),
       SubmissionRow: {
         type: "object",
@@ -425,7 +428,11 @@ export const openApiDocument = {
           type: "object",
           required: ["data", "nextCursor"],
           properties: {
-            data: { type: "array", maxItems: 100, items: ref("SubmissionRow") },
+            data: {
+              type: "array",
+              maxItems: MAX_SUBMISSIONS_PAGE_SIZE,
+              items: ref("SubmissionRow"),
+            },
             nextCursor: { type: ["string", "null"] },
           },
         },
@@ -479,6 +486,34 @@ export const openApiDocument = {
           request: ref("SubmissionDeletion"),
         },
       ),
+    },
+    [`${workspacePath}/submissions/mark-processed`]: {
+      post: {
+        ...operation(
+          "markSubmissionsProcessed",
+          "Mark selected responses from one form as processed (editor+)",
+          {
+            type: "object",
+            required: ["updatedCount"],
+            properties: {
+              updatedCount: {
+                type: "integer",
+                minimum: 0,
+                maximum: MAX_SUBMISSIONS_PAGE_SIZE,
+                description:
+                  "Number of responses that changed from new to processed",
+              },
+            },
+          },
+          {
+            admin: true,
+            parameters: [ws],
+            request: ref("MarkSubmissionsProcessed"),
+          },
+        ),
+        description:
+          "All IDs must belong to the specified form in this workspace. Already processed responses are accepted. If any response is unavailable in the form, the operation returns 409 and updates nothing.",
+      },
     },
   },
 };

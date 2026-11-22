@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const MAX_SUBMISSIONS_PAGE_SIZE = 100;
+
 export const submissionFilterSchema = z
   .object({
     deliveryStatus: z
@@ -24,7 +26,12 @@ export const submissionFilterSchema = z
 
 export const submissionListQuerySchema = submissionFilterSchema.safeExtend({
   cursor: z.string().max(500).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_SUBMISSIONS_PAGE_SIZE)
+    .optional(),
 });
 
 export type SubmissionFilters = z.infer<typeof submissionFilterSchema>;

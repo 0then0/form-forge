@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Alert,
   Badge,
   Button,
   EmptyState,
@@ -8,7 +9,7 @@ import {
   Select,
   Skeleton,
 } from "@form-forge/ui";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createColumnHelper,
   tableFeatures,
@@ -37,6 +38,10 @@ type SubmissionPage = {
   nextCursor: string | null;
 };
 
+const emptyRows: SubmissionRow[] = [];
+const listChangedMessage =
+  "The submissions list has changed. Review your selection and try again.";
+
 const statusTone = {
   failed: "danger",
   pending: "warning",
@@ -48,12 +53,15 @@ const features = tableFeatures({});
 const columnHelper = createColumnHelper<typeof features, SubmissionRow>();
 
 export const SubmissionsTable = ({
+  canEdit,
   forms,
   workspaceSlug,
 }: {
+  canEdit: boolean;
   forms: Array<{ id: string; name: string }>;
   workspaceSlug: string;
 }) => {
+  const queryClient = useQueryClient();
   const [formId, setFormId] = useState("");
   const [status, setStatus] = useState("");
   const [processingStatus, setProcessingStatus] = useState("");
@@ -65,48 +73,81 @@ export const SubmissionsTable = ({
   const [filters, setFilters] = useState(filterDraft);
   const [hiddenColumns, setHiddenColumns] = useState<string[]>([]);
   const [valueColumns, setValueColumns] = useState<string[]>([]);
-  const appendFilters = (params: URLSearchParams) => {
-    if (processingStatus) params.set("processingStatus", processingStatus);
-    if (filters.q) params.set("q", filters.q);
-    if (filters.from) params.set("from", `${filters.from}T00:00:00Z`);
-    if (filters.until) params.set("until", `${filters.until}T00:00:00Z`);
-  };
-  const query = useInfiniteQuery({
-    initialPageParam: "",
-    queryFn: async ({ pageParam }) => {
-      const params = new URLSearchParams();
-      if (pageParam) params.set("cursor", pageParam);
-      if (formId) params.set("formId", formId);
-      if (status) params.set("deliveryStatus", status);
-      appendFilters(params);
-      const response = await fetch(
-        `/api/admin/workspaces/${workspaceSlug}/submissions?${params}`,
-      );
+  const [pageCursors, setPageCursors] = useState<string[]>([]);
+  const [selection, setSelection] = useState<string[] | "invalidated">([]);
+  const cursor = pageCursors.at(-1);
+  const submissionsPath = `/api/admin/workspaces/${workspaceSlug}/submissions`;
+  const filterParams = new URLSearchParams();
+  if (formId) filterParams.set("formId", formId);
+  if (status) filterParams.set("deliveryStatus", status);
+  if (processingStatus) filterParams.set("processingStatus", processingStatus);
+  if (filters.q) filterParams.set("q", filters.q);
+  if (filters.from) filterParams.set("from", `${filters.from}T00:00:00Z`);
+  if (filters.until) filterParams.set("until", `${filters.until}T00:00:00Z`);
+  const listKey = ["submissions", workspaceSlug];
+  const queryKey = [...listKey, filterParams.toString(), cursor];
+  const query = useQuery({
+    queryKey,
+    queryFn: async ({ signal }) => {
+      const params = new URLSearchParams(filterParams);
+      if (cursor) params.set("cursor", cursor);
+      const response = await fetch(`${submissionsPath}?${params}`, { signal });
       return readApiData<SubmissionPage>(
         response,
         "Could not load submissions",
       );
     },
-    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-    queryKey: [
-      "submissions",
-      workspaceSlug,
-      formId,
-      status,
-      processingStatus,
-      filters,
-    ],
   });
-  const rows = useMemo(
-    () => query.data?.pages.flatMap((page) => page.data) ?? [],
-    [query.data],
-  );
-  const exportParams = new URLSearchParams();
-  if (formId) exportParams.set("formId", formId);
-  if (status) exportParams.set("deliveryStatus", status);
-  appendFilters(exportParams);
-  const exportHref = `/api/admin/workspaces/${workspaceSlug}/submissions/export${
-    exportParams.size > 0 ? `?${exportParams}` : ""
+  const rows = query.data?.data ?? emptyRows;
+  const nextCursor = query.data?.nextCursor;
+  const selectedIds = selection === "invalidated" ? [] : selection;
+  const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
+  if (selectedRows.length !== selectedIds.length) {
+    // A later refresh can bring the missing response back to the page.
+    setSelection("invalidated");
+  }
+  const selectedFormId = selectedRows[0]?.formId;
+  const singleFormPage = rows.every((row) => row.formId === rows[0]?.formId);
+  const allSelected = selectedIds.length === rows.length;
+  const mutationKey = ["mark-submissions-processed", workspaceSlug];
+  const markProcessed = useMutation({
+    mutationKey,
+    mutationFn: async (input: { formId: string; submissionIds: string[] }) => {
+      const response = await fetch(`${submissionsPath}/mark-processed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (response.status === 409) return "conflict";
+      await readApiData(response, "Could not mark responses as processed");
+      return "processed";
+    },
+    onSuccess: async () => {
+      setSelection([]);
+      await queryClient.invalidateQueries({ queryKey: listKey });
+      if (
+        cursor &&
+        queryClient.getQueryData<SubmissionPage>(queryKey)?.data.length === 0
+      ) {
+        setPageCursors([]);
+      }
+    },
+  });
+  const pending = markProcessed.isPending;
+  const batchError =
+    markProcessed.data === "conflict" || selection === "invalidated"
+      ? listChangedMessage
+      : markProcessed.error?.message;
+  const updateSelection = (ids: string[]) => {
+    setSelection(ids);
+    markProcessed.reset();
+  };
+  const changePage = (cursors: string[]) => {
+    setPageCursors(cursors);
+    updateSelection([]);
+  };
+  const exportHref = `${submissionsPath}/export${
+    filterParams.size > 0 ? `?${filterParams}` : ""
   }`;
   const columns = useMemo(
     () =>
@@ -191,6 +232,7 @@ export const SubmissionsTable = ({
     features,
     columns,
     data: rows,
+    getRowId: (row) => row.id,
   });
 
   return (
@@ -199,8 +241,12 @@ export const SubmissionsTable = ({
         <Select
           aria-label="Filter by delivery status"
           className="w-48"
+          disabled={pending}
           value={status}
-          onChange={(event) => setStatus(event.target.value)}
+          onChange={(event) => {
+            changePage([]);
+            setStatus(event.target.value);
+          }}
         >
           <option value="">All delivery statuses</option>
           <option value="pending">Pending</option>
@@ -211,8 +257,12 @@ export const SubmissionsTable = ({
         <Select
           aria-label="Filter by form"
           className="w-56"
+          disabled={pending}
           value={formId}
-          onChange={(event) => setFormId(event.target.value)}
+          onChange={(event) => {
+            changePage([]);
+            setFormId(event.target.value);
+          }}
         >
           <option value="">All forms</option>
           {forms.map((form) => (
@@ -224,8 +274,12 @@ export const SubmissionsTable = ({
         <Select
           aria-label="Filter by processing status"
           className="w-48"
+          disabled={pending}
           value={processingStatus}
-          onChange={(event) => setProcessingStatus(event.target.value)}
+          onChange={(event) => {
+            changePage([]);
+            setProcessingStatus(event.target.value);
+          }}
         >
           <option value="">All processing statuses</option>
           <option value="new">New</option>
@@ -242,6 +296,7 @@ export const SubmissionsTable = ({
         className="mb-4 flex flex-wrap items-end gap-3"
         onSubmit={(event) => {
           event.preventDefault();
+          changePage([]);
           setFilters({ ...filterDraft, q: filterDraft.q.trim() });
         }}
       >
@@ -249,6 +304,7 @@ export const SubmissionsTable = ({
           From (UTC, inclusive)
           <Input
             type="date"
+            disabled={pending}
             value={filterDraft.from}
             onChange={(event) =>
               setFilterDraft({ ...filterDraft, from: event.target.value })
@@ -259,6 +315,7 @@ export const SubmissionsTable = ({
           Until (UTC, exclusive)
           <Input
             type="date"
+            disabled={pending}
             value={filterDraft.until}
             onChange={(event) =>
               setFilterDraft({ ...filterDraft, until: event.target.value })
@@ -269,6 +326,7 @@ export const SubmissionsTable = ({
           Search answer words
           <Input
             type="search"
+            disabled={pending}
             minLength={2}
             maxLength={100}
             value={filterDraft.q}
@@ -277,7 +335,7 @@ export const SubmissionsTable = ({
             }
           />
         </label>
-        <Button type="submit" variant="secondary">
+        <Button type="submit" variant="secondary" disabled={pending}>
           Apply filters
         </Button>
       </form>
@@ -336,6 +394,33 @@ export const SubmissionsTable = ({
         </div>
       </details>
 
+      {canEdit && (rows.length > 0 || pending) ? (
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={pending || !selectedFormId || query.isError}
+            onClick={() => {
+              if (selectedFormId && !queryClient.isMutating({ mutationKey })) {
+                markProcessed.mutate({
+                  formId: selectedFormId,
+                  submissionIds: selectedIds,
+                });
+              }
+            }}
+          >
+            {pending
+              ? "Marking as processed…"
+              : `Mark as processed (${selectedIds.length})`}
+          </Button>
+          {singleFormPage ? null : (
+            <p className="text-sm text-slate-600">
+              Select responses from one form at a time.
+            </p>
+          )}
+        </div>
+      ) : null}
+      {batchError ? <Alert className="mb-4">{batchError}</Alert> : null}
       {query.isPending ? (
         <div className="space-y-2">
           {Array.from({ length: 5 }).map((_, index) => (
@@ -353,7 +438,13 @@ export const SubmissionsTable = ({
       ) : rows.length === 0 ? (
         <EmptyState
           title="No submissions"
-          description="Submissions from published hosted forms will appear here."
+          description={
+            cursor
+              ? "There are no more submissions. Go to the previous page."
+              : filterParams.size
+                ? "No submissions match the current filters."
+                : "Submissions from published hosted forms will appear here."
+          }
         />
       ) : (
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -361,6 +452,34 @@ export const SubmissionsTable = ({
             <thead className="border-b border-slate-200 bg-slate-50 text-xs tracking-wide text-slate-500 uppercase">
               {table.getHeaderGroups().map((headerGroup) => (
                 <tr key={headerGroup.id}>
+                  {canEdit ? (
+                    <th scope="col" className="w-px px-4 py-3">
+                      {singleFormPage ? (
+                        <label className="flex items-center gap-2 whitespace-nowrap">
+                          <input
+                            type="checkbox"
+                            ref={(checkbox) => {
+                              if (checkbox)
+                                checkbox.indeterminate =
+                                  selectedIds.length > 0 && !allSelected;
+                            }}
+                            checked={allSelected}
+                            disabled={pending}
+                            onChange={(event) =>
+                              updateSelection(
+                                event.target.checked
+                                  ? rows.map((row) => row.id)
+                                  : [],
+                              )
+                            }
+                          />
+                          Select this page
+                        </label>
+                      ) : (
+                        <span className="sr-only">Selection</span>
+                      )}
+                    </th>
+                  ) : null}
                   {headerGroup.headers.map((header) => (
                     <th key={header.id} className="px-4 py-3 font-medium">
                       {header.isPlaceholder ? null : (
@@ -377,6 +496,30 @@ export const SubmissionsTable = ({
                   key={row.id}
                   className="relative hover:bg-slate-50 focus-within:bg-slate-50"
                 >
+                  {canEdit ? (
+                    <td className="px-4 py-3">
+                      <input
+                        aria-label={`Select response ${row.original.id}`}
+                        className="relative z-10"
+                        type="checkbox"
+                        checked={selectedIds.includes(row.original.id)}
+                        disabled={
+                          pending ||
+                          (selectedFormId !== undefined &&
+                            selectedFormId !== row.original.formId)
+                        }
+                        onChange={(event) =>
+                          updateSelection(
+                            event.target.checked
+                              ? [...selectedIds, row.original.id]
+                              : selectedIds.filter(
+                                  (id) => id !== row.original.id,
+                                ),
+                          )
+                        }
+                      />
+                    </td>
+                  ) : null}
                   {row.getAllCells().map((cell) => (
                     <td key={cell.id} className="px-4 py-3 whitespace-nowrap">
                       <table.FlexRender cell={cell} />
@@ -389,14 +532,25 @@ export const SubmissionsTable = ({
         </div>
       )}
 
-      {query.hasNextPage ? (
-        <div className="mt-4 text-center">
+      {cursor || nextCursor ? (
+        <div className="mt-4 flex justify-center gap-3">
           <Button
-            disabled={query.isFetchingNextPage}
+            type="button"
+            disabled={pending || !cursor}
             variant="secondary"
-            onClick={() => void query.fetchNextPage()}
+            onClick={() => changePage(pageCursors.slice(0, -1))}
           >
-            {query.isFetchingNextPage ? "Loading…" : "Load more"}
+            Previous page
+          </Button>
+          <Button
+            type="button"
+            disabled={pending || !nextCursor}
+            variant="secondary"
+            onClick={() => {
+              if (nextCursor) changePage([...pageCursors, nextCursor]);
+            }}
+          >
+            Next page
           </Button>
         </div>
       ) : null}

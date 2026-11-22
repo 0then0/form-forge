@@ -53,4 +53,25 @@ test("publishes reusable JSON Schemas and actual product routes without weakenin
       (param: { name: string }) => !["cursor", "limit"].includes(param.name),
     ),
   ).toEqual(csv);
+  const markProcessed =
+    spec.paths[
+      "/api/admin/workspaces/{workspaceSlug}/submissions/mark-processed"
+    ].post;
+  expect(markProcessed.requestBody.content["application/json"].schema).toEqual({
+    $ref: "#/components/schemas/MarkSubmissionsProcessed",
+  });
+  expect(markProcessed.responses).toHaveProperty("409");
+  expect(spec.components.schemas.MarkSubmissionsProcessed).toMatchObject({
+    required: ["formId", "submissionIds"],
+    properties: {
+      formId: { format: "uuid" },
+      submissionIds: {
+        minItems: 1,
+        maxItems: list.find((param: { name: string }) => param.name === "limit")
+          .schema.maximum,
+        uniqueItems: true,
+        items: { format: "uuid" },
+      },
+    },
+  });
 });
