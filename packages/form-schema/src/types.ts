@@ -1,3 +1,5 @@
+import type { SubmissionIssue } from "./submission-issues";
+
 export const FIELD_TYPES = [
   "shortText",
   "longText",
@@ -9,6 +11,10 @@ export const FIELD_TYPES = [
 ] as const;
 
 export type FieldType = (typeof FIELD_TYPES)[number];
+
+export const FORM_LANGUAGES = ["en", "ru"] as const;
+export const DEFAULT_FORM_LANGUAGE = "en";
+export type FormLanguage = (typeof FORM_LANGUAGES)[number];
 
 export type LayoutWidth = "full" | "half";
 
@@ -110,6 +116,7 @@ export type FormSchemaV1 = {
   description?: string | undefined;
   fields: FormField[];
   settings: {
+    language?: FormLanguage | undefined;
     submitLabel: string;
     successTitle: string;
     successMessage: string;
@@ -145,6 +152,7 @@ export type NormalizedSubmission = Record<string, NormalizedSubmissionValue>;
 export type SubmissionFieldError = {
   field: string;
   message: string;
+  issue: SubmissionIssue;
 };
 
 export type NormalizeSubmissionResult =

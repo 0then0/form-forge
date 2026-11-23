@@ -7,7 +7,7 @@
 These routes do not require signing in:
 
 - `GET /api/forms/:slug` returns the current published form:
-  `{ data: { form, schema, versionId, versionNumber } }`.
+  `{ data: { form, intake, schema, versionId, versionNumber } }`.
 - `POST /api/forms/:slug/submit` accepts `{ versionId, values, context? }` and
   requires an `Idempotency-Key` header.
 - `/f/:slug` serves the hosted form page. Add `?embed=1` for the iframe layout;
@@ -49,6 +49,10 @@ remain valid while the form is available, so a page that a visitor opened before
 you published a new version can still be submitted. Editing the draft never
 changes a published schema.
 
+`schema.settings.language` is `en` or `ru`. Definitions that omit it use `en`.
+`intake.message` contains the saved closed intake text, or the default for the
+returned version's language.
+
 ### Optional context
 
 `context` can include `visitorId`, `referrer` and `utm`, with the standard
@@ -66,6 +70,17 @@ Errors use `{ error: { code, message, requestId, fieldErrors? } }`:
 - `422`: validation failed; `fieldErrors` lists problems by field key.
 - `429`: a rate limit or quota was exceeded; `Retry-After` gives the wait in
   seconds.
+
+Submission validation errors also provide `error.fieldIssues` when answers fail
+the published schema's rules. It maps field keys (or `_root`) to arrays of
+stable codes and any required parameters, such as
+`{ "code": "MIN_LENGTH", "params": { "limit": 3 } }`. The existing `message`
+and `fieldErrors` are unchanged and still provide English validation text.
+
+A `409` caused by closed intake includes `error.closedIntake.customMessage`.
+Use that text when present. A `null` value calls for the default in the submitted
+version's language. The existing `error.message` contains the saved text or the
+English default.
 
 ## Limits
 

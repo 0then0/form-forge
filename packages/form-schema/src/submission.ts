@@ -9,6 +9,10 @@ import {
   MAX_SUBMISSION_TEXT_LENGTH,
 } from "./limits";
 import { isFieldVisible } from "./visibility";
+import {
+  formatSubmissionIssue,
+  type SubmissionIssue,
+} from "./submission-issues";
 import type {
   FormField,
   FormSchemaV1,
@@ -20,6 +24,15 @@ import type {
 
 const emailSchema = z.email();
 const dateSchema = z.iso.date();
+
+const fieldError = (
+  field: string,
+  issue: SubmissionIssue,
+): SubmissionFieldError => ({
+  field,
+  issue,
+  message: formatSubmissionIssue(issue),
+});
 
 const valueIsMissing = (value: unknown): boolean =>
   value === undefined ||
@@ -33,7 +46,7 @@ const validateField = (
 ): NormalizedSubmissionValue | SubmissionFieldError => {
   if (valueIsMissing(value)) {
     if (field.required) {
-      return { field: field.key, message: "This field is required" };
+      return fieldError(field.key, { code: "REQUIRED" });
     }
     return "";
   }
@@ -42,7 +55,7 @@ const validateField = (
     case "shortText":
     case "longText": {
       if (typeof value !== "string") {
-        return { field: field.key, message: "Expected text" };
+        return fieldError(field.key, { code: "EXPECTED_TEXT" });
       }
       const normalized = value.trim();
       const productLimit =
@@ -50,31 +63,31 @@ const validateField = (
           ? MAX_LONG_TEXT_LENGTH
           : MAX_SHORT_TEXT_LENGTH;
       if (normalized.length > productLimit) {
-        return {
-          field: field.key,
-          message: `Must contain at most ${productLimit} characters`,
-        };
+        return fieldError(field.key, {
+          code: "MAX_LENGTH",
+          params: { limit: productLimit },
+        });
       }
       const minLength = field.validation?.minLength;
       const maxLength = field.validation?.maxLength;
       if (minLength !== undefined && normalized.length < minLength) {
-        return {
-          field: field.key,
-          message: `Must contain at least ${minLength} characters`,
-        };
+        return fieldError(field.key, {
+          code: "MIN_LENGTH",
+          params: { limit: minLength },
+        });
       }
       if (maxLength !== undefined && normalized.length > maxLength) {
-        return {
-          field: field.key,
-          message: `Must contain at most ${maxLength} characters`,
-        };
+        return fieldError(field.key, {
+          code: "MAX_LENGTH",
+          params: { limit: maxLength },
+        });
       }
       if (
         field.validation?.pattern !== undefined &&
         (!patternLooksSafe(field.validation.pattern) ||
           !new RegExp(field.validation.pattern).test(normalized))
       ) {
-        return { field: field.key, message: "Invalid format" };
+        return fieldError(field.key, { code: "INVALID_FORMAT" });
       }
       return normalized;
     }
@@ -84,7 +97,7 @@ const validateField = (
         value.trim().length > MAX_EMAIL_LENGTH ||
         !emailSchema.safeParse(value.trim()).success
       ) {
-        return { field: field.key, message: "Enter a valid email address" };
+        return fieldError(field.key, { code: "INVALID_EMAIL" });
       }
       return value.trim().toLowerCase();
     }
@@ -97,25 +110,25 @@ const validateField = (
             ? Number(value)
             : Number.NaN;
       if (!Number.isFinite(normalized)) {
-        return { field: field.key, message: "Enter a valid number" };
+        return fieldError(field.key, { code: "INVALID_NUMBER" });
       }
       if (
         field.validation?.min !== undefined &&
         normalized < field.validation.min
       ) {
-        return {
-          field: field.key,
-          message: `Must be at least ${field.validation.min}`,
-        };
+        return fieldError(field.key, {
+          code: "MIN_NUMBER",
+          params: { limit: field.validation.min },
+        });
       }
       if (
         field.validation?.max !== undefined &&
         normalized > field.validation.max
       ) {
-        return {
-          field: field.key,
-          message: `Must be at most ${field.validation.max}`,
-        };
+        return fieldError(field.key, {
+          code: "MAX_NUMBER",
+          params: { limit: field.validation.max },
+        });
       }
       return normalized;
     }
@@ -124,34 +137,34 @@ const validateField = (
         typeof value !== "string" ||
         !field.options.some((option) => option.value === value)
       ) {
-        return { field: field.key, message: "Select a valid option" };
+        return fieldError(field.key, { code: "INVALID_OPTION" });
       }
       return value;
     }
     case "checkbox": {
       if (typeof value !== "boolean") {
-        return { field: field.key, message: "Expected a checkbox value" };
+        return fieldError(field.key, { code: "EXPECTED_CHECKBOX" });
       }
       if (field.required && !value) {
-        return { field: field.key, message: "This field must be checked" };
+        return fieldError(field.key, { code: "MUST_BE_CHECKED" });
       }
       return value;
     }
     case "date": {
       if (typeof value !== "string" || !dateSchema.safeParse(value).success) {
-        return { field: field.key, message: "Enter a valid date" };
+        return fieldError(field.key, { code: "INVALID_DATE" });
       }
       if (field.validation?.min !== undefined && value < field.validation.min) {
-        return {
-          field: field.key,
-          message: `Date must be on or after ${field.validation.min}`,
-        };
+        return fieldError(field.key, {
+          code: "MIN_DATE",
+          params: { date: field.validation.min },
+        });
       }
       if (field.validation?.max !== undefined && value > field.validation.max) {
-        return {
-          field: field.key,
-          message: `Date must be on or before ${field.validation.max}`,
-        };
+        return fieldError(field.key, {
+          code: "MAX_DATE",
+          params: { date: field.validation.max },
+        });
       }
       return value;
     }
@@ -264,10 +277,10 @@ export const normalizeSubmission = (
     return {
       success: false,
       errors: [
-        {
-          field: "_root",
-          message: `A submission can contain at most ${MAX_SUBMISSION_FIELDS} fields`,
-        },
+        fieldError("_root", {
+          code: "MAX_FIELDS",
+          params: { limit: MAX_SUBMISSION_FIELDS },
+        }),
       ],
     };
   }
@@ -276,10 +289,9 @@ export const normalizeSubmission = (
   if (unknownKeys.length > 0) {
     return {
       success: false,
-      errors: unknownKeys.map((field) => ({
-        field,
-        message: "Unknown field",
-      })),
+      errors: unknownKeys.map((field) =>
+        fieldError(field, { code: "UNKNOWN_FIELD" }),
+      ),
     };
   }
 
@@ -305,10 +317,12 @@ export const normalizeSubmission = (
       if (typeof validated === "string") {
         totalTextLength += validated.length;
         if (totalTextLength > MAX_SUBMISSION_TEXT_LENGTH) {
-          errors.push({
-            field: "_root",
-            message: `Submission text can contain at most ${MAX_SUBMISSION_TEXT_LENGTH} characters`,
-          });
+          errors.push(
+            fieldError("_root", {
+              code: "MAX_TOTAL_LENGTH",
+              params: { limit: MAX_SUBMISSION_TEXT_LENGTH },
+            }),
+          );
           break;
         }
       }

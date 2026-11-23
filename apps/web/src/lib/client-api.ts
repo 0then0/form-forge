@@ -1,6 +1,13 @@
+import {
+  submissionErrorDetailsSchema,
+  type SubmissionErrorDetails,
+} from "./errors";
+
 type ApiErrorBody = {
+  code?: string;
   fieldErrors?: Record<string, string[]>;
   message?: string;
+  submissionDetails?: SubmissionErrorDetails;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -11,6 +18,7 @@ const isStringArray = (value: unknown): value is string[] =>
 
 const parseError = (value: unknown): ApiErrorBody | undefined => {
   if (!isRecord(value)) return undefined;
+  const code = typeof value.code === "string" ? value.code : undefined;
   const message = typeof value.message === "string" ? value.message : undefined;
   const rawFieldErrors = value.fieldErrors;
   const fieldErrors = isRecord(rawFieldErrors)
@@ -20,9 +28,14 @@ const parseError = (value: unknown): ApiErrorBody | undefined => {
         ),
       )
     : undefined;
+  const submissionDetails = submissionErrorDetailsSchema.safeParse(value);
   return {
+    ...(code === undefined ? {} : { code }),
     ...(fieldErrors === undefined ? {} : { fieldErrors }),
     ...(message === undefined ? {} : { message }),
+    ...(submissionDetails.success
+      ? { submissionDetails: submissionDetails.data }
+      : {}),
   };
 };
 
@@ -30,6 +43,8 @@ export class ClientApiError extends Error {
   constructor(
     message: string,
     readonly fieldErrors?: Record<string, string[]>,
+    readonly code?: string,
+    readonly submissionDetails?: SubmissionErrorDetails,
   ) {
     super(message);
     this.name = "ClientApiError";
@@ -54,6 +69,8 @@ export const readApiData = async <T>(
     throw new ClientApiError(
       error?.message ?? fallbackMessage,
       error?.fieldErrors,
+      error?.code,
+      error?.submissionDetails,
     );
   }
 

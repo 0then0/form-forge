@@ -7,6 +7,13 @@ release also includes detailed upgrade instructions.
 
 ## [Unreleased]
 
+### Added
+
+- Choose English or Russian for each published form's system messages on the
+  public page and in embeds. Form templates carry the language setting.
+- Public submission errors include stable field codes and parameters for
+  localization alongside the existing English validation messages.
+
 ## [0.5.0] - 2026-11-22
 
 ### Added

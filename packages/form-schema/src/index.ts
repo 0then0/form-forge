@@ -18,6 +18,10 @@ export {
   sanitizePartialAnswers,
 } from "./submission";
 export {
+  formatSubmissionIssue,
+  submissionFieldIssuesSchema,
+} from "./submission-issues";
+export {
   createFormTemplate,
   FORM_TEMPLATE_FORMAT,
   FORM_TEMPLATE_VERSION,
@@ -36,6 +40,7 @@ export type {
   EmailField,
   FieldType,
   FormField,
+  FormLanguage,
   FormSchemaV1,
   LayoutWidth,
   LongTextField,
@@ -52,6 +57,6 @@ export type {
   VisibilityOperator,
   VisibilityRule,
 } from "./types";
-export { FIELD_TYPES } from "./types";
+export { DEFAULT_FORM_LANGUAGE, FIELD_TYPES, FORM_LANGUAGES } from "./types";
 
 export { isSafeHttpUrl } from "./safe-url";

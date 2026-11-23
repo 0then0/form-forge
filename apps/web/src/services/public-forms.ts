@@ -28,6 +28,7 @@ import {
 } from "@/lib/usage-policy";
 import { consumeUsage, consumeSubmissionRate } from "./usage";
 import { isIntakeClosed } from "@/lib/form-policy";
+import { getPublicFormMessages } from "@/lib/public-form-messages";
 import { hashDeletedSubmissionKey } from "@/lib/deleted-submission-key";
 
 const hashFingerprint = (value: string): string =>
@@ -72,6 +73,7 @@ export const getPublishedForm = async (slug: string, versionId?: string) => {
     )
     .limit(1);
   if (!version) throw notFoundError("Published form version not found");
+  const schema = formSchemaV1Schema.parse(version.schema);
 
   return {
     form: {
@@ -83,9 +85,11 @@ export const getPublishedForm = async (slug: string, versionId?: string) => {
     intake: {
       closed: isIntakeClosed(form),
       closesAt: form.closesAt?.toISOString() ?? null,
-      message: form.closedMessage,
+      message:
+        form.closedMessage ||
+        getPublicFormMessages(schema.settings.language).closed,
     },
-    version: { ...version, schema: formSchemaV1Schema.parse(version.schema) },
+    version: { ...version, schema },
   };
 };
 
@@ -142,6 +146,12 @@ export const receiveSubmission = async ({
       Object.fromEntries(
         normalized.errors.map((error) => [error.field, [error.message]]),
       ),
+      undefined,
+      {
+        fieldIssues: Object.fromEntries(
+          normalized.errors.map(({ field, issue }) => [field, [issue]]),
+        ),
+      },
     );
   }
 
@@ -233,7 +243,14 @@ export const receiveSubmission = async ({
         new Date(Number(clock.rows[0]?.epochMs ?? Date.now())),
       )
     ) {
-      throw new AppError("CONFLICT", activeForm.closedMessage, 409);
+      throw new AppError(
+        "CONFLICT",
+        activeForm.closedMessage || getPublicFormMessages().closed,
+        409,
+        undefined,
+        undefined,
+        { closedIntake: { customMessage: activeForm.closedMessage || null } },
+      );
     }
 
     if (activeForm.collectMetadata) {

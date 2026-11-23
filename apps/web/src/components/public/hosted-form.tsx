@@ -1,10 +1,17 @@
 "use client";
 
-import { FormRenderer } from "@form-forge/form-renderer";
-import type {
-  FormSchemaV1,
-  NormalizedSubmission,
-  SubmissionContext,
+import {
+  FormRenderer,
+  FormSubmissionError,
+  rendererMessages,
+} from "@form-forge/form-renderer";
+import {
+  DEFAULT_FORM_LANGUAGE,
+  formatSubmissionIssue,
+  type FormLanguage,
+  type FormSchemaV1,
+  type NormalizedSubmission,
+  type SubmissionContext,
 } from "@form-forge/form-schema";
 import { Button, Card, CardContent } from "@form-forge/ui";
 import { CheckCircle2 } from "lucide-react";
@@ -13,7 +20,8 @@ import { useRef, useState } from "react";
 import { webRendererComponents } from "@/components/renderer-adapter";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useEmbedBridge } from "./use-embed-bridge";
-import { readApiData } from "@/lib/client-api";
+import { ClientApiError, readApiData } from "@/lib/client-api";
+import { getPublicFormMessages } from "@/lib/public-form-messages";
 import { useLocalDraft } from "./use-local-draft";
 import type { LocalSubmissionAttempt } from "./local-draft";
 
@@ -70,6 +78,8 @@ export const HostedForm = ({
   slug: string;
   versionId: string;
 }) => {
+  const language = schema.settings.language ?? DEFAULT_FORM_LANGUAGE;
+  const messages = getPublicFormMessages(language);
   const [submitted, setSubmitted] = useState(false);
   const [retryError, setRetryError] = useState<string>();
   const [sending, setSending] = useState(false);
@@ -90,17 +100,35 @@ export const HostedForm = ({
       },
       method: "POST",
     });
+    const fallback = rendererMessages[language].submissionFailed;
     try {
-      await readApiData<{ submissionId: string }>(
-        response,
-        "Your response could not be submitted",
-      );
+      await readApiData<{ submissionId: string }>(response, fallback);
     } catch (error) {
       // These responses definitively reject the request before committing it.
       // Leave transport/server failures bound to their original payload/key.
       if (response.status === 400 || response.status === 422)
         draft.validationRejected();
-      throw error;
+      if (!(error instanceof ClientApiError))
+        throw new FormSubmissionError(fallback);
+      const details = error.submissionDetails;
+      if (response.status === 409 && details?.closedIntake) {
+        throw new FormSubmissionError(
+          details.closedIntake.customMessage ?? messages.closed,
+        );
+      }
+      if (error.code === "RATE_LIMITED")
+        throw new FormSubmissionError(messages.rateLimited);
+      if (error.code === "NOT_FOUND")
+        throw new FormSubmissionError(messages.unavailable);
+      const fieldErrors =
+        details?.fieldIssues &&
+        Object.fromEntries(
+          Object.entries(details.fieldIssues).map(([field, issues]) => [
+            field,
+            issues.map((issue) => formatSubmissionIssue(issue, language)),
+          ]),
+        );
+      throw new FormSubmissionError(fallback, fieldErrors);
     }
     draft.complete();
     setSubmitted(true);
@@ -127,9 +155,11 @@ export const HostedForm = ({
       await submit(draft.attempt.values);
     } catch (error) {
       setRetryError(
-        error instanceof Error
-          ? error.message
-          : "Retry failed. Please try again.",
+        error instanceof FormSubmissionError
+          ? Object.values(error.fieldErrors ?? {})
+              .flat()
+              .join(". ") || error.message
+          : messages.retryFailed,
       );
     }
   };
@@ -137,6 +167,7 @@ export const HostedForm = ({
     <LocalDraftControls
       draft={draft}
       closed={Boolean(closedMessage)}
+      language={language}
       sending={sending}
       retry={() => void retry()}
     />
@@ -185,14 +216,20 @@ export const HostedForm = ({
 
   if (compact)
     return (
-      <div ref={embedRoot} className="bg-white p-5">
+      <div lang={language} ref={embedRoot} className="bg-white p-5">
         {content}
         {submitted && draft.error ? <p role="alert">{draft.error}</p> : null}
       </div>
     );
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl items-center px-4 py-12 sm:px-6">
-      <ThemeToggle className="fixed top-4 right-4 sm:top-6 sm:right-6" />
+    <main
+      lang={language}
+      className="mx-auto flex min-h-screen max-w-2xl items-center px-4 py-12 sm:px-6"
+    >
+      <ThemeToggle
+        className="fixed top-4 right-4 sm:top-6 sm:right-6"
+        labels={messages.theme}
+      />
       <div className="w-full">
         <Card>
           <CardContent className="p-6 sm:p-8">
@@ -203,7 +240,7 @@ export const HostedForm = ({
           </CardContent>
         </Card>
         <p className="mt-4 text-center text-xs text-slate-500">
-          Powered by{" "}
+          {messages.poweredBy}{" "}
           <a
             className="font-medium hover:underline"
             href="https://github.com/0then0/form-forge"
@@ -221,213 +258,199 @@ export const HostedForm = ({
 const LocalDraftControls = ({
   draft,
   closed,
+  language,
   sending,
   retry,
 }: {
   draft: ReturnType<typeof useLocalDraft>;
   closed: boolean;
+  language: FormLanguage;
   sending: boolean;
   retry: () => void;
-}) => (
-  <section
-    aria-label="Saved response"
-    className="my-5 space-y-3 rounded-md border border-slate-200 p-4 text-sm"
-  >
-    {draft.error ? (
-      <p role="alert" className="text-red-700">
-        {draft.error}
-      </p>
-    ) : null}
-    {draft.notice ? <p role="status">{draft.notice}</p> : null}
-    {draft.incompatible.length ? (
-      <div className="space-y-2">
-        <p>
-          Saved answers exist for a different published version. They cannot be
-          restored into this version.
+}) => {
+  const messages = getPublicFormMessages(language);
+  return (
+    <section
+      aria-label={messages.savedResponse}
+      className="my-5 space-y-3 rounded-md border border-slate-200 p-4 text-sm"
+    >
+      {draft.error ? (
+        <p role="alert" className="text-red-700">
+          {draft.error}
         </p>
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={sending}
-          onClick={draft.deleteIncompatible}
-        >
-          Delete incompatible saved answers
-        </Button>
-      </div>
-    ) : null}
-    {draft.pending ? (
-      <div className="space-y-2">
-        <p>
-          Saved answers from{" "}
-          {new Date(draft.pending.updatedAt).toLocaleString()}. Resume or
-          discard this saved response before continuing.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" onClick={draft.resume} disabled={closed || sending}>
-            Resume
-          </Button>
+      ) : null}
+      {draft.notice ? <p role="status">{draft.notice}</p> : null}
+      {draft.incompatible.length ? (
+        <div className="space-y-2">
+          <p>{messages.incompatible}</p>
           <Button
-            size="sm"
             variant="secondary"
-            onClick={draft.discard}
+            size="sm"
             disabled={sending}
+            onClick={draft.deleteIncompatible}
           >
-            Discard
+            {messages.deleteIncompatible}
           </Button>
         </div>
-      </div>
-    ) : draft.conflict ? (
-      <div className="space-y-2">
-        <p role="alert">
-          This saved response changed in another tab. Automatic saving is
-          paused. It may have been discarded or submitted. Your current answers
-          have not been replaced.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={draft.resume}
-            disabled={closed || sending}
-          >
-            Use saved answers
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={draft.keepMine}
-            disabled={closed || sending}
-          >
-            Keep my answers
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={draft.discard}
-            disabled={sending}
-          >
-            Discard
-          </Button>
-        </div>
-      </div>
-    ) : !closed ? (
-      <>
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={draft.enabled}
-            disabled={sending}
-            onChange={(event) => draft.toggle(event.currentTarget.checked)}
-            className="size-4 accent-slate-950"
-          />
-          Save answers on this device
-        </label>
-        <p className="text-slate-600">
-          Optional. Answers stay in this browser for up to 7 days after the last
-          save. Anyone using this browser profile may access them. They are sent
-          to the server only when you submit.
-        </p>
-        {draft.enabled ? (
-          <>
-            <p role="status">
-              {draft.saving
-                ? "Saving changes…"
-                : draft.savedAt
-                  ? `Saved on this device at ${new Date(draft.savedAt).toLocaleString()}.`
-                  : "Saving is active."}
-            </p>
-            <p className="text-slate-600">
-              Only the saved confirmation means a write completed. The last
-              characters may be lost if the browser stops before saving.
-            </p>
+      ) : null}
+      {draft.pending ? (
+        <div className="space-y-2">
+          <p>
+            {messages.pending(
+              new Date(draft.pending.updatedAt).toLocaleString(language),
+            )}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              onClick={draft.resume}
+              disabled={closed || sending}
+            >
+              {messages.resume}
+            </Button>
             <Button
               size="sm"
               variant="secondary"
               onClick={draft.discard}
               disabled={sending}
             >
-              Delete saved answers
+              {messages.discard}
             </Button>
-          </>
-        ) : null}
-      </>
-    ) : null}
-    {draft.attempt && !closed && !sending ? (
-      <div className="space-y-2">
-        <p role="alert">
-          The previous submission outcome is unknown. Retry sends the original
-          answers with the same key, even if you have edited this form.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            disabled={sending || draft.conflict}
-            onClick={retry}
-          >
-            Retry original attempt
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={sending}
-            onClick={() => draft.setConfirmNew(true)}
-          >
-            Start a new attempt
-          </Button>
+          </div>
         </div>
-      </div>
-    ) : null}
-    {draft.confirmDiscard ? (
-      <div className="space-y-2">
-        <p role="alert">
-          The previous attempt may already have been accepted. Discarding
-          removes its saved retry. Submitting again with a new key could create
-          a second response.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="danger"
-            disabled={sending}
-            onClick={draft.performDiscard}
-          >
-            Confirm discard
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => draft.setConfirmDiscard(false)}
-          >
-            Cancel discard
-          </Button>
+      ) : draft.conflict ? (
+        <div className="space-y-2">
+          <p role="alert">{messages.tabConflict}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={draft.resume}
+              disabled={closed || sending}
+            >
+              {messages.useSaved}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={draft.keepMine}
+              disabled={closed || sending}
+            >
+              {messages.keepMine}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={draft.discard}
+              disabled={sending}
+            >
+              {messages.discard}
+            </Button>
+          </div>
         </div>
-      </div>
-    ) : null}
-    {draft.confirmNew ? (
-      <div className="space-y-2">
-        <p role="alert">
-          The previous attempt may already have been accepted. A new attempt
-          uses a new key and could create a second response. Confirm to use your
-          current answers instead.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="danger"
-            disabled={sending || closed}
-            onClick={draft.newAttempt}
-          >
-            Confirm new attempt
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => draft.setConfirmNew(false)}
-          >
-            Cancel
-          </Button>
+      ) : !closed ? (
+        <>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={draft.enabled}
+              disabled={sending}
+              onChange={(event) => draft.toggle(event.currentTarget.checked)}
+              className="size-4 accent-slate-950"
+            />
+            {messages.saveOnDevice}
+          </label>
+          <p className="text-slate-600">{messages.savingDescription}</p>
+          {draft.enabled ? (
+            <>
+              <p role="status">
+                {draft.saving
+                  ? messages.savingChanges
+                  : draft.savedAt
+                    ? messages.savedAt(
+                        new Date(draft.savedAt).toLocaleString(language),
+                      )
+                    : messages.savingActive}
+              </p>
+              <p className="text-slate-600">{messages.savingConfirmation}</p>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={draft.discard}
+                disabled={sending}
+              >
+                {messages.deleteSaved}
+              </Button>
+            </>
+          ) : null}
+        </>
+      ) : null}
+      {draft.attempt && !closed && !sending ? (
+        <div className="space-y-2">
+          <p role="alert">{messages.unknownOutcome}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              disabled={sending || draft.conflict}
+              onClick={retry}
+            >
+              {messages.retryOriginal}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={sending}
+              onClick={() => draft.setConfirmNew(true)}
+            >
+              {messages.startNew}
+            </Button>
+          </div>
         </div>
-      </div>
-    ) : null}
-  </section>
-);
+      ) : null}
+      {draft.confirmDiscard ? (
+        <div className="space-y-2">
+          <p role="alert">{messages.discardWarning}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={sending}
+              onClick={draft.performDiscard}
+            >
+              {messages.confirmDiscard}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => draft.setConfirmDiscard(false)}
+            >
+              {messages.cancelDiscard}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {draft.confirmNew ? (
+        <div className="space-y-2">
+          <p role="alert">{messages.newAttemptWarning}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={sending || closed}
+              onClick={draft.newAttempt}
+            >
+              {messages.confirmNew}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => draft.setConfirmNew(false)}
+            >
+              {messages.cancel}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+};

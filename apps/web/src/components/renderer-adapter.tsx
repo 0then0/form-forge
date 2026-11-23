@@ -82,10 +82,13 @@ const RendererSelect = (
 const SubmitButton = (props: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
   <Button {...props} />
 );
-const ErrorSummary = ({ errors }: { errors: string[] }) =>
+const ErrorSummary: RendererComponents["ErrorSummary"] = ({
+  errors,
+  heading,
+}) =>
   errors.length === 0 ? null : (
     <Alert className="mb-5 space-y-2">
-      <p className="font-medium">Please correct the following:</p>
+      <p className="font-medium">{heading}</p>
       <ul className="list-disc space-y-1 pl-5 leading-6 wrap-break-word">
         {errors.map((error, index) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: Repeated error messages need distinct keys and these rows have no state.

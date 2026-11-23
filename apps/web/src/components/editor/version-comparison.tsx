@@ -1,7 +1,12 @@
-import type { FormField, FormSchemaV1 } from "@form-forge/form-schema";
+import {
+  DEFAULT_FORM_LANGUAGE,
+  type FormField,
+  type FormSchemaV1,
+} from "@form-forge/form-schema";
 import { Badge } from "@form-forge/ui";
 
 import type { compareSchemas } from "./schema-comparison";
+import { formLanguageLabels } from "./form-settings";
 
 type Comparison = ReturnType<typeof compareSchemas>;
 type Property = { label: string; value: string };
@@ -65,6 +70,11 @@ const fieldProperties = (field: FormField | undefined): Property[] => {
 const formProperties = (schema: FormSchemaV1): Property[] => [
   { label: "Title", value: schema.title },
   { label: "Description", value: schema.description ?? "" },
+  {
+    label: "Form language",
+    value:
+      formLanguageLabels[schema.settings.language ?? DEFAULT_FORM_LANGUAGE],
+  },
   { label: "Submit button", value: schema.settings.submitLabel },
   { label: "Success title", value: schema.settings.successTitle },
   { label: "Success message", value: schema.settings.successMessage },

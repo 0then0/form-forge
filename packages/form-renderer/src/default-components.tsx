@@ -52,10 +52,13 @@ const Select = (props: React.SelectHTMLAttributes<HTMLSelectElement>) => (
 const SubmitButton = (props: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
   <button {...props} />
 );
-const ErrorSummary = ({ errors }: { errors: string[] }) =>
+const ErrorSummary: RendererComponents["ErrorSummary"] = ({
+  errors,
+  heading,
+}) =>
   errors.length === 0 ? null : (
     <div role="alert">
-      <p>Please correct the following errors:</p>
+      <p>{heading}</p>
       <ul>
         {errors.map((error, index) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: Repeated messages have no local state.

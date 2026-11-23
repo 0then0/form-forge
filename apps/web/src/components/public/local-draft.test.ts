@@ -140,9 +140,9 @@ describe("local draft records", () => {
     expect(found.current).toBeNull();
     expect(found.notices).toEqual(
       expect.arrayContaining([
-        "An expired saved draft was removed after seven days.",
-        "A damaged saved draft was removed.",
-        "A saved draft used an unsupported format and was removed.",
+        "draftExpired",
+        "draftDamaged",
+        "draftUnsupported",
       ]),
     );
     expect(JSON.stringify(found.notices)).not.toContain("private answer");
@@ -174,7 +174,7 @@ describe("local draft records", () => {
       window.localStorage.setItem(localDraftKey(draft), JSON.stringify(raw));
       expect(discoverLocalDrafts(draft)).toMatchObject({
         current: null,
-        notices: ["A damaged saved draft was removed."],
+        notices: ["draftDamaged"],
       });
     },
   );

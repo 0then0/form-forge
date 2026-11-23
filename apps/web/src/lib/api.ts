@@ -2,7 +2,7 @@ import * as Sentry from "@sentry/nextjs";
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
-import { AppError } from "./errors";
+import { AppError, type SubmissionErrorDetails } from "./errors";
 
 type ErrorBody = {
   error: {
@@ -10,7 +10,7 @@ type ErrorBody = {
     message: string;
     requestId: string;
     fieldErrors?: Record<string, string[]>;
-  };
+  } & SubmissionErrorDetails;
 };
 
 // These limits cover the domain maxima even when JSON uses six-byte Unicode
@@ -55,6 +55,7 @@ export const apiError = (
           ...(error.fieldErrors === undefined
             ? {}
             : { fieldErrors: error.fieldErrors }),
+          ...error.submissionDetails,
         },
       },
       {

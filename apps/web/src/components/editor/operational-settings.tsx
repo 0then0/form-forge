@@ -139,13 +139,17 @@ export const OperationalSettings = ({
               <Label htmlFor="intake-message">Closed intake message</Label>
               <Textarea
                 id="intake-message"
-                required
                 maxLength={500}
+                aria-describedby="intake-message-help"
                 value={policy.closedMessage}
                 onChange={(event) =>
                   change({ closedMessage: event.target.value })
                 }
               />
+              <p id="intake-message-help" className="text-sm text-slate-600">
+                Leave blank to show the default message in the published form's
+                language.
+              </p>
             </div>
             {canEdit ? (
               <Button type="submit" className="w-fit">

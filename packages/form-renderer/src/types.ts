@@ -17,5 +17,5 @@ export type RendererComponents = {
   SubmitButton: React.ComponentType<
     React.ButtonHTMLAttributes<HTMLButtonElement>
   >;
-  ErrorSummary: React.ComponentType<{ errors: string[] }>;
+  ErrorSummary: React.ComponentType<{ errors: string[]; heading: string }>;
 };

@@ -7,7 +7,11 @@ import {
 } from "./limits";
 import { isSafeHttpUrl } from "./safe-url";
 import { patternLooksSafe } from "./safe-pattern";
-import type { FormSchemaV1 } from "./types";
+import {
+  DEFAULT_FORM_LANGUAGE,
+  FORM_LANGUAGES,
+  type FormSchemaV1,
+} from "./types";
 
 const IDENTIFIER_PATTERN = /^[a-z][a-z0-9_]*$/;
 
@@ -237,6 +241,7 @@ export const formSchemaV1Schema = z
     fields: z.array(formFieldSchema).max(MAX_SUBMISSION_FIELDS),
     settings: z
       .object({
+        language: z.enum(FORM_LANGUAGES).default(DEFAULT_FORM_LANGUAGE),
         submitLabel: z.string().trim().min(1).max(80),
         successTitle: z.string().trim().min(1).max(160),
         successMessage: z.string().trim().min(1).max(1_000),
@@ -362,6 +367,7 @@ export const defaultFormSchema = (): FormSchemaV1 => ({
   title: "Untitled form",
   fields: [],
   settings: {
+    language: DEFAULT_FORM_LANGUAGE,
     submitLabel: "Submit",
     successTitle: "Thank you",
     successMessage: "Your response has been received.",

@@ -6,7 +6,13 @@ const formPolicySchema = z
     paused: z.boolean(),
     closesAt: z.iso.datetime({ offset: true }).nullable(),
     maxAccepted: z.number().int().min(1).max(2_147_483_647).nullable(),
-    closedMessage: z.string().trim().min(1).max(500),
+    closedMessage: z
+      .string()
+      .trim()
+      .max(500)
+      .describe(
+        "Custom closed intake message. An empty string uses the published version's language.",
+      ),
   })
   .strict();
 

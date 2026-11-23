@@ -2,6 +2,7 @@
 
 import {
   defaultFormSchema,
+  formSchemaV1Schema,
   MAX_FORM_TEMPLATE_BYTES,
   type FormSchemaV1,
 } from "@form-forge/form-schema";
@@ -261,7 +262,9 @@ integration("submission and delivery pipeline", () => {
         );
       await migrate(db, { migrationsFolder: previousFolder });
       // Seed actual pre-upgrade rows, which do not have any operational columns.
-      const legacySchema = schema();
+      const initialSchema = schema();
+      const { language: _language, ...settings } = initialSchema.settings;
+      const legacySchema = { ...initialSchema, settings };
       const legacyUser = crypto.randomUUID();
       const legacyWorkspace = crypto.randomUUID();
       const legacyForm = crypto.randomUUID();
@@ -294,10 +297,11 @@ integration("submission and delivery pipeline", () => {
           paused: false,
           closesAt: null,
           maxAccepted: null,
+          closedMessage: "This form is no longer accepting responses.",
         },
       ]);
       expect((await getPublishedForm("legacy-form")).version.schema).toEqual(
-        legacySchema,
+        initialSchema,
       );
       expect(await db.select().from(submissions)).toMatchObject([
         {
@@ -487,6 +491,61 @@ integration("submission and delivery pipeline", () => {
       .where(eq(forms.id, seeded.form.id));
     expect(published?.status).toBe("published");
     expect(published?.name).toBe("Updated draft");
+  });
+
+  test("publishes a corrected draft after validation rules have changed", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const current = schema();
+    const field = current.fields[0];
+    if (field?.type !== "shortText") throw new Error("Missing text field");
+    const { language: _language, ...settings } = current.settings;
+    const legacy = {
+      ...current,
+      settings,
+      fields: [{ ...field, validation: { pattern: "^(blue|green)$" } }],
+    };
+    const seeded = await seedForm({
+      workspaceId: workspace.id,
+      userId: user.id,
+      formSchema: legacy,
+    });
+    if (!seeded.version) throw new Error("Missing legacy version");
+
+    const result = await publishForm(workspace.slug, seeded.form.id, {
+      expectedRevision: seeded.form.updatedAt.toISOString(),
+      schema: { ...current, settings: { ...current.settings, language: "ru" } },
+    });
+
+    expect(result.versionNumber).toBe(2);
+    expect((await getPublishedForm(seeded.form.slug)).version.schema).toEqual(
+      result.schema,
+    );
+    const [previous] = await db
+      .select({ schema: formVersions.schema })
+      .from(formVersions)
+      .where(eq(formVersions.id, seeded.version.id));
+    expect(previous?.schema).toEqual(legacy);
+  });
+
+  test("rejects republishing legacy English as an identical version", async () => {
+    const { user, workspace } = await seedWorkspace();
+    const english = formSchemaV1Schema.parse(schema());
+    const { language: _language, ...settings } = english.settings;
+    const seeded = await seedForm({
+      workspaceId: workspace.id,
+      userId: user.id,
+      formSchema: { ...english, settings },
+    });
+
+    await expect(
+      publishForm(workspace.slug, seeded.form.id, {
+        expectedRevision: seeded.form.updatedAt.toISOString(),
+        schema: english,
+      }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "This draft is identical to a published version",
+    });
   });
 
   test("permanent deletion requires an owner, an archived form and its exact name", async () => {
@@ -3563,6 +3622,7 @@ integration("submission and delivery pipeline", () => {
       },
     ],
     settings: {
+      language: "ru",
       submitLabel: "Register",
       successTitle: "Registered",
       successMessage: "See you there.",

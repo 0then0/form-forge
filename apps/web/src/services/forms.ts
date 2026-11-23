@@ -1,6 +1,7 @@
 import "server-only";
 
 import {
+  DEFAULT_FORM_LANGUAGE,
   defaultFormSchema,
   formSchemaV1Schema,
   type FormSchemaV1,
@@ -260,7 +261,15 @@ export const publishForm = async (
           .where(eq(formVersions.id, form.publishedVersionId))
           .limit(1)
       : [];
-    if (currentVersion?.schemaHash === schemaHash) {
+    // Older English versions were hashed before the language setting existed.
+    const { language, ...legacySettings } = schema.settings;
+    if (
+      currentVersion?.schemaHash === schemaHash ||
+      (currentVersion &&
+        language === DEFAULT_FORM_LANGUAGE &&
+        currentVersion.schemaHash ===
+          hashSchema({ ...schema, settings: legacySettings }))
+    ) {
       throw new AppError(
         "CONFLICT",
         "This draft is identical to a published version",

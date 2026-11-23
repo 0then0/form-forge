@@ -136,30 +136,34 @@ const isRecord = (value: unknown): value is LocalDraftRecord => {
   return true;
 };
 
+type DraftRemovalNotice =
+  | "draftTooLarge"
+  | "draftDamaged"
+  | "draftUnsupported"
+  | "draftExpired";
+
 type DecodedDraft =
   | { record: LocalDraftRecord; notice?: never }
-  | { record?: never; notice: string };
+  | { record?: never; notice: DraftRemovalNotice };
 
 const decodeDraft = (raw: string, key: string, now: number): DecodedDraft => {
   if (new Blob([raw]).size > MAX_DRAFT_RECORD_BYTES) {
-    return { notice: "An oversized saved draft was removed." };
+    return { notice: "draftTooLarge" };
   }
   let value: unknown;
   try {
     value = JSON.parse(raw);
   } catch {
-    return { notice: "A damaged saved draft was removed." };
+    return { notice: "draftDamaged" };
   }
   if (isObject(value) && value.formatVersion !== 1) {
-    return {
-      notice: "A saved draft used an unsupported format and was removed.",
-    };
+    return { notice: "draftUnsupported" };
   }
   if (!isRecord(value) || localDraftKey(value) !== key) {
-    return { notice: "A damaged saved draft was removed." };
+    return { notice: "draftDamaged" };
   }
   if (value.expiresAt <= now) {
-    return { notice: "An expired saved draft was removed after seven days." };
+    return { notice: "draftExpired" };
   }
   return { record: value };
 };
@@ -198,12 +202,12 @@ export const discoverLocalDrafts = (
 ): {
   current: LocalDraftRecord | null;
   incompatible: LocalDraftRecord[];
-  notices: string[];
+  notices: DraftRemovalNotice[];
 } =>
   withStorage((storage) => {
     let current: LocalDraftRecord | null = null;
     const incompatible: LocalDraftRecord[] = [];
-    const notices = new Set<string>();
+    const notices = new Set<DraftRemovalNotice>();
     for (const key of ownKeys(storage)) {
       const raw = storage.getItem(key);
       if (raw === null) continue;

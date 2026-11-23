@@ -19,6 +19,19 @@ always keep a reference to the version they were submitted against.
 
 The interface supports system, light and dark themes.
 
+### Form language
+
+Choose **Form language** in the editor and publish the draft. **English** and
+**Русский** set the language of the public page and embedded form, including the
+default select prompt, validation and submission messages, and save, resume and
+retry controls. Older definitions without a language use English. An open form
+keeps the language of the version the visitor started filling in.
+
+Questions, hints, option labels, button labels and completion text are shown as
+saved. The editor starts with **Submit**, **Thank you** and an English success
+message as editable form text. Replace these values in the editor when you want
+different wording.
+
 ## Form templates
 
 A form template is a JSON file that carries a form definition to another
@@ -32,7 +45,8 @@ the draft after you opened it, reload the editor before exporting.
 The file contains a format identifier, a format version and the form definition:
 title, description, fields in their order, select options in their order, field
 identifiers and keys, webhook keys, validation, conditional visibility, layout,
-submit label and success message. `formatVersion` describes the file and
+form language, submit label and success text. Older templates without a language
+import in English. `formatVersion` describes the file and
 `form.schemaVersion` describes the definition; both must be supported by the
 installation that imports the file. A template never contains responses,
 respondent drafts, users, roles, intake and privacy settings, publication
@@ -140,6 +154,11 @@ Open **Intake and privacy** in the form editor to:
 Leave the closing time or maximum empty for no limit. These settings take effect
 immediately for every published version, including pages that visitors already
 have open. Archiving a form also takes it offline.
+
+Leave **Closed intake message** empty to use the default message in the
+visitor's published version language. New forms start with this default.
+Existing forms retain their saved message. Clear the field and save the intake
+settings to switch to the localized default.
 
 The closing time is checked against the database clock for each new response, so
 no scheduled job is needed. To resume a form after its closing time has passed or

@@ -13,6 +13,19 @@ test("publishes reusable JSON Schemas and actual product routes without weakenin
       .collectMetadata.type,
   ).toBe("boolean");
   expect(spec.paths["/api/forms/{slug}/submit"].post.security).toEqual([]);
+  const settings = spec.components.schemas.FormSchema.properties.settings;
+  expect(settings.properties.language).toMatchObject({
+    enum: ["en", "ru"],
+    default: "en",
+  });
+  expect(settings.required).not.toContain("language");
+  expect(
+    spec.components.schemas.Error.properties.error.properties,
+  ).toMatchObject({
+    fieldErrors: { type: "object" },
+    fieldIssues: { type: "object" },
+    closedIntake: { required: ["customMessage"] },
+  });
   expect(spec.paths["/api/forms/{slug}/submit"].post.responses).toHaveProperty(
     "200",
   );

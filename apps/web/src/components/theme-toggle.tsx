@@ -4,15 +4,15 @@ import { cn } from "@form-forge/ui";
 import { Laptop, Moon, Sun, type LucideIcon } from "lucide-react";
 import { useSyncExternalStore } from "react";
 
-import { THEME_STORAGE_KEY } from "@/lib/theme";
+import { defaultThemeLabels, THEME_STORAGE_KEY } from "@/lib/theme";
 
 type Theme = "system" | "light" | "dark";
 const THEME_CHANGE_EVENT = "form-forge-theme-change";
 
-const themes: Array<{ icon: LucideIcon; label: string; value: Theme }> = [
-  { icon: Laptop, label: "System theme", value: "system" },
-  { icon: Sun, label: "Light theme", value: "light" },
-  { icon: Moon, label: "Dark theme", value: "dark" },
+const themes: Array<{ icon: LucideIcon; value: Theme }> = [
+  { icon: Laptop, value: "system" },
+  { icon: Sun, value: "light" },
+  { icon: Moon, value: "dark" },
 ];
 
 const isTheme = (value: string | null): value is Theme =>
@@ -67,7 +67,13 @@ const subscribeTheme = (onStoreChange: () => void) => {
   };
 };
 
-export const ThemeToggle = ({ className }: { className?: string }) => {
+export const ThemeToggle = ({
+  className,
+  labels = defaultThemeLabels,
+}: {
+  className?: string;
+  labels?: typeof defaultThemeLabels;
+}) => {
   const theme = useSyncExternalStore(
     subscribeTheme,
     storedTheme,
@@ -83,7 +89,7 @@ export const ThemeToggle = ({ className }: { className?: string }) => {
   return (
     // biome-ignore lint/a11y/useSemanticElements: This named group contains theme buttons, not form fields.
     <div
-      aria-label="Color theme"
+      aria-label={labels.group}
       className={cn(
         "inline-flex items-center rounded-lg border border-slate-200 bg-white p-1 shadow-sm",
         className,
@@ -95,7 +101,7 @@ export const ThemeToggle = ({ className }: { className?: string }) => {
         return (
           <button
             key={option.value}
-            aria-label={option.label}
+            aria-label={labels[option.value]}
             aria-pressed={selected}
             className={cn(
               "inline-flex size-7 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:outline-none",
@@ -103,7 +109,7 @@ export const ThemeToggle = ({ className }: { className?: string }) => {
                 ? "bg-slate-950 text-white"
                 : "text-slate-500 hover:bg-slate-100 hover:text-slate-950",
             )}
-            title={option.label}
+            title={labels[option.value]}
             type="button"
             onClick={() => selectTheme(option.value)}
           >

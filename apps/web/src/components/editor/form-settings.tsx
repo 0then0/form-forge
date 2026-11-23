@@ -1,8 +1,24 @@
 "use client";
 
-import type { FormSchemaV1 } from "@form-forge/form-schema";
-import { Card, CardContent, Input, Label, Textarea } from "@form-forge/ui";
+import {
+  FORM_LANGUAGES,
+  type FormLanguage,
+  type FormSchemaV1,
+} from "@form-forge/form-schema";
+import {
+  Card,
+  CardContent,
+  Input,
+  Label,
+  Select,
+  Textarea,
+} from "@form-forge/ui";
 import type { UseFormRegister } from "react-hook-form";
+
+export const formLanguageLabels: Record<FormLanguage, string> = {
+  en: "English",
+  ru: "Русский",
+};
 
 export const FormSettings = ({
   canEdit,
@@ -24,6 +40,26 @@ export const FormSettings = ({
           disabled={!canEdit}
           {...register("description")}
         />
+      </div>
+      <div className="space-y-2 sm:col-span-2">
+        <Label htmlFor="form-language">Form language</Label>
+        <Select
+          id="form-language"
+          disabled={!canEdit}
+          aria-describedby="form-language-help"
+          {...register("settings.language")}
+        >
+          {FORM_LANGUAGES.map((language) => (
+            <option key={language} value={language} lang={language}>
+              {formLanguageLabels[language]}
+            </option>
+          ))}
+        </Select>
+        <p id="form-language-help" className="text-sm text-slate-600">
+          Sets the language of system controls and messages for this version.
+          Edit the questions, hints, submit button and success text separately,
+          including any prefilled text.
+        </p>
       </div>
       <div className="space-y-2">
         <Label htmlFor="submit-label">Submit button</Label>

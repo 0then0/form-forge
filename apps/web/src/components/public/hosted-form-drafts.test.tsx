@@ -287,7 +287,8 @@ describe("HostedForm local drafts", () => {
       screen.getByRole("checkbox", { name: "Save answers on this device" }),
     );
     await user.click(screen.getByRole("button", { name: "Send response" }));
-    await screen.findByText("Connection lost");
+    await screen.findByText("Your response could not be submitted");
+    expect(screen.queryByText("Connection lost")).not.toBeInTheDocument();
     const prepared = stored().attempt;
     expect(prepared.values).toEqual({ name: "Original" });
     first.unmount();
@@ -320,8 +321,10 @@ describe("HostedForm local drafts", () => {
         new Response(
           JSON.stringify({
             error: {
+              code: "VALIDATION_ERROR",
               message: "Invalid response",
-              fieldErrors: { name: ["Please correct this answer"] },
+              fieldErrors: { name: ["This field is required"] },
+              fieldIssues: { name: [{ code: "REQUIRED" }] },
             },
           }),
           { status: 422 },
@@ -336,7 +339,7 @@ describe("HostedForm local drafts", () => {
       screen.getByRole("checkbox", { name: "Save answers on this device" }),
     );
     await user.click(screen.getByRole("button", { name: "Send response" }));
-    await screen.findAllByText("Please correct this answer");
+    await screen.findAllByText("This field is required");
     expect(screen.getByLabelText("Name *")).toHaveValue("Rejected");
     expect(stored().answers).toEqual({ name: "Rejected" });
     expect(stored()).not.toHaveProperty("attempt");
@@ -362,7 +365,7 @@ describe("HostedForm local drafts", () => {
     const first = mount();
     await user.type(screen.getByLabelText("Name *"), "Original");
     await user.click(screen.getByRole("button", { name: "Send response" }));
-    await screen.findByText("Transport outcome unknown");
+    await screen.findByText("Your response could not be submitted");
     expect(window.localStorage.length).toBe(0);
     expect(Object.values(window.sessionStorage).join(" ")).not.toContain(
       "Original",
@@ -436,7 +439,7 @@ describe("HostedForm local drafts", () => {
       screen.getByRole("checkbox", { name: "Save answers on this device" }),
     );
     await user.click(screen.getByRole("button", { name: "Send response" }));
-    await screen.findByText("Unknown transport outcome");
+    await screen.findByText("Your response could not be submitted");
     const originalKey = stored().attempt.key;
     first.unmount();
     mount();
@@ -566,7 +569,7 @@ describe("HostedForm local drafts", () => {
       );
       if (withAttempt) {
         await user.click(screen.getByRole("button", { name: "Send response" }));
-        await screen.findByText("Unconfirmed response");
+        await screen.findByText("Your response could not be submitted");
       } else {
         await user.type(screen.getByLabelText("Name *"), " while saving");
         expect(screen.getByText("Saving changes…")).toBeVisible();

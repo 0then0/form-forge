@@ -1,0 +1,1 @@
+ALTER TABLE "forms" ALTER COLUMN "closed_message" SET DEFAULT '';

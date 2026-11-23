@@ -6,6 +6,7 @@ import {
 } from "@form-forge/form-schema";
 import { z } from "zod";
 import { formPolicyMutationSchema } from "./form-policy";
+import { submissionErrorDetailsSchema } from "./errors";
 import {
   MAX_SUBMISSIONS_PAGE_SIZE,
   submissionListQuerySchema,
@@ -145,11 +146,13 @@ export const openApiDocument = {
               requestId: { type: "string" },
               fieldErrors: {
                 type: "object",
+                description: "Legacy validation messages grouped by field key.",
                 additionalProperties: {
                   type: "array",
                   items: { type: "string" },
                 },
               },
+              ...schema(submissionErrorDetailsSchema).properties,
             },
           },
         },

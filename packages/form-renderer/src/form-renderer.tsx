@@ -1,9 +1,11 @@
 "use client";
 
 import {
+  DEFAULT_FORM_LANGUAGE,
   MAX_EMAIL_LENGTH,
   MAX_LONG_TEXT_LENGTH,
   MAX_SHORT_TEXT_LENGTH,
+  formatSubmissionIssue,
   getVisibleFields,
   isSafeHttpUrl,
   normalizeSubmission,
@@ -16,6 +18,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm, useWatch, type FieldErrors } from "react-hook-form";
 
 import { defaultRendererComponents } from "./default-components";
+import { rendererMessages } from "./messages";
 import type { RendererComponents } from "./types";
 
 type FormValues = Record<string, string | number | boolean>;
@@ -29,6 +32,16 @@ export type FormRendererProps = {
   onAnswersChange?: ((answers: NormalizedSubmission) => void) | undefined;
   onRestoreResult?: ((result: { droppedKeys: string[] }) => void) | undefined;
 };
+
+// onSubmit can supply text that has already been prepared for respondents.
+export class FormSubmissionError extends Error {
+  constructor(
+    message: string,
+    readonly fieldErrors?: Record<string, string[]>,
+  ) {
+    super(message);
+  }
+}
 
 const getFieldError = (
   errors: FieldErrors<FormValues>,
@@ -49,6 +62,7 @@ const getServerFieldErrors = (
     Object.entries(fieldErrors).filter(
       (entry): entry is [string, string[]] =>
         Array.isArray(entry[1]) &&
+        entry[1].length > 0 &&
         entry[1].every((message) => typeof message === "string"),
     ),
   );
@@ -63,6 +77,8 @@ export const FormRenderer = ({
   restoreAnswers,
   schema,
 }: FormRendererProps) => {
+  const language = schema.settings.language ?? DEFAULT_FORM_LANGUAGE;
+  const messages = rendererMessages[language];
   const ui = useMemo(
     () => ({ ...defaultRendererComponents, ...components }),
     [components],
@@ -87,9 +103,12 @@ export const FormRenderer = ({
         ? { errors: {}, values }
         : {
             errors: Object.fromEntries(
-              result.errors.map(({ field, message }) => [
+              result.errors.map(({ field, issue }) => [
                 field,
-                { type: "validate", message },
+                {
+                  type: "validate",
+                  message: formatSubmissionIssue(issue, language),
+                },
               ]),
             ),
             values: {},
@@ -135,7 +154,10 @@ export const FormRenderer = ({
     const normalized = normalizeSubmission(schema, values);
     if (!normalized.success) {
       for (const error of normalized.errors) {
-        setError(error.field, { message: error.message, type: "validate" });
+        setError(error.field, {
+          message: formatSubmissionIssue(error.issue, language),
+          type: "validate",
+        });
       }
       return;
     }
@@ -143,28 +165,25 @@ export const FormRenderer = ({
     try {
       await onSubmit(normalized.receivedValues);
     } catch (error) {
-      const fieldErrors = getServerFieldErrors(error);
-      if (fieldErrors) {
-        for (const [field, messages] of Object.entries(fieldErrors)) {
-          if (
-            field !== "_root" &&
-            schema.fields.some(({ key }) => key === field)
-          ) {
-            setError(field, { message: messages.join(". "), type: "server" });
-          }
+      const fieldErrors = getServerFieldErrors(error) ?? {};
+      const summary: string[] = [];
+      for (const [field, fieldMessages] of Object.entries(fieldErrors)) {
+        if (visibleFields.some(({ key }) => key === field)) {
+          setError(field, {
+            message: fieldMessages.join(". "),
+            type: "server",
+          });
+        } else {
+          summary.push(...fieldMessages);
         }
       }
-      const rootError = fieldErrors?._root?.join(". ");
-      if (rootError !== undefined) {
-        setServerError(rootError);
-      } else if (
-        fieldErrors === undefined ||
-        Object.keys(fieldErrors).length === 0
-      ) {
+      if (summary.length) {
+        setServerError(summary.join(". "));
+      } else if (Object.keys(fieldErrors).length === 0) {
         setServerError(
-          error instanceof Error
+          error instanceof FormSubmissionError
             ? error.message
-            : "The form could not be submitted. Please try again.",
+            : messages.submissionFailed,
         );
       }
     }
@@ -176,8 +195,8 @@ export const FormRenderer = ({
   if (serverError !== undefined) errorMessages.unshift(serverError);
 
   return (
-    <form onSubmit={(event) => void submit(event)} noValidate>
-      <ui.ErrorSummary errors={errorMessages} />
+    <form lang={language} onSubmit={(event) => void submit(event)} noValidate>
+      <ui.ErrorSummary errors={errorMessages} heading={messages.errorSummary} />
       <div data-form-fields>
         {visibleFields.map((field) => (
           <RenderedField
@@ -187,11 +206,12 @@ export const FormRenderer = ({
             error={getFieldError(errors, field.key)}
             field={field}
             register={register}
+            selectOption={messages.selectOption}
           />
         ))}
       </div>
       <ui.SubmitButton type="submit" disabled={disabled || isSubmitting}>
-        {isSubmitting ? "Submitting…" : schema.settings.submitLabel}
+        {isSubmitting ? messages.submitting : schema.settings.submitLabel}
       </ui.SubmitButton>
     </form>
   );
@@ -203,6 +223,7 @@ type RenderedFieldProps = {
   error?: string | undefined;
   field: FormField;
   register: ReturnType<typeof useForm<FormValues>>["register"];
+  selectOption: string;
 };
 
 const RenderedField = ({
@@ -211,6 +232,7 @@ const RenderedField = ({
   error,
   field,
   register,
+  selectOption,
 }: RenderedFieldProps) => {
   const describedBy = [
     field.description === undefined ? undefined : `${field.id}-description`,
@@ -248,7 +270,7 @@ const RenderedField = ({
     case "select":
       control = (
         <components.Select {...common} {...registration}>
-          <option value="">{field.placeholder ?? "Select an option"}</option>
+          <option value="">{field.placeholder ?? selectOption}</option>
           {field.options.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}

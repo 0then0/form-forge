@@ -53,8 +53,23 @@ const schema: FormSchemaV1 = {
 };
 
 describe("FormSchemaV1", () => {
-  it("accepts a valid schema", () => {
-    expect(formSchemaV1Schema.parse(schema)).toEqual(schema);
+  it("defaults an older definition to English and validates explicit languages", () => {
+    expect(formSchemaV1Schema.parse(schema)).toEqual({
+      ...schema,
+      settings: { ...schema.settings, language: "en" },
+    });
+    expect(
+      formSchemaV1Schema.parse({
+        ...schema,
+        settings: { ...schema.settings, language: "ru" },
+      }).settings.language,
+    ).toBe("ru");
+    expect(
+      formSchemaV1Schema.safeParse({
+        ...schema,
+        settings: { ...schema.settings, language: "fr" },
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects visibility references to later fields", () => {
@@ -133,6 +148,10 @@ describe("FormSchemaV1", () => {
         {
           field: "_root",
           message: `Submission text can contain at most ${MAX_SUBMISSION_TEXT_LENGTH} characters`,
+          issue: {
+            code: "MAX_TOTAL_LENGTH",
+            params: { limit: MAX_SUBMISSION_TEXT_LENGTH },
+          },
         },
       ],
       success: false,
@@ -171,7 +190,13 @@ describe("FormSchemaV1", () => {
     );
 
     expect(result).toEqual({
-      errors: [{ field: "company", message: "This field is required" }],
+      errors: [
+        {
+          field: "company",
+          message: "This field is required",
+          issue: { code: "REQUIRED" },
+        },
+      ],
       success: false,
     });
     expect(
@@ -349,7 +374,13 @@ describe("invalid optional numbers", () => {
     ];
     expect(normalizeSubmission(form, { amount: value })).toEqual({
       success: false,
-      errors: [{ field: "amount", message: "Enter a valid number" }],
+      errors: [
+        {
+          field: "amount",
+          message: "Enter a valid number",
+          issue: { code: "INVALID_NUMBER" },
+        },
+      ],
     });
   });
 });

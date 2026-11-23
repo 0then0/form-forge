@@ -44,6 +44,7 @@ test.skipIf(!process.env.TEST_DATABASE_URL)(
           "utf8",
         ),
       );
+      const migrationCount = journal.entries.length;
       journal.entries = journal.entries.filter((entry) => entry.idx < 6);
       await mkdir(join(folder, "meta"));
       await writeFile(
@@ -112,7 +113,7 @@ test.skipIf(!process.env.TEST_DATABASE_URL)(
           "SELECT hash, created_at FROM drizzle.__drizzle_migrations ORDER BY created_at",
         )
       ).rows;
-      expect(after).toHaveLength(7);
+      expect(after).toHaveLength(migrationCount);
       expect(after.slice(0, 6)).toEqual(before);
       expect((await client.query("SELECT name FROM workspaces")).rows).toEqual([
         { name: "Historical workspace" },

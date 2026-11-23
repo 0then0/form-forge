@@ -154,7 +154,7 @@ export const forms = pgTable(
     maxAccepted: integer("max_accepted"),
     acceptedCount: integer("accepted_count").default(0).notNull(),
     closedMessage: varchar("closed_message", { length: 500 })
-      .default("This form is no longer accepting responses.")
+      .default("")
       .notNull(),
     policyUpdatedAt: timestamp("policy_updated_at", { withTimezone: true })
       .defaultNow()

@@ -45,6 +45,7 @@ const form: FormSchemaV1 = {
     },
   ],
   settings: {
+    language: "ru",
     submitLabel: "Register",
     successTitle: "See you there",
     successMessage: "Your registration has been received.",
@@ -69,7 +70,7 @@ describe("form templates", () => {
     });
   });
 
-  it("round-trips identifiers, order, options and conditional references", () => {
+  it("round-trips language, identifiers, order, options and conditional references", () => {
     const result = roundTrip(createFormTemplate(form));
     expect(result).toEqual({
       success: true,

@@ -1,7 +1,12 @@
-import { defaultFormSchema, type FormSchemaV1 } from "@form-forge/form-schema";
-import { expect, test } from "@playwright/test";
+import {
+  createFormTemplate,
+  defaultFormSchema,
+  type FormSchemaV1,
+} from "@form-forge/form-schema";
+import { expect, test, type Page } from "@playwright/test";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
 import { fileURLToPath } from "node:url";
 
@@ -774,4 +779,317 @@ test("auto-resizes multiple cross-origin embeds and ignores forged messages whil
       window as unknown as { FormForgeEmbed: { destroyAll: () => void } }
     ).FormForgeEmbed.destroyAll(),
   );
+});
+
+const openForms = async (page: Page) => {
+  await page.context().addCookies([
+    {
+      domain: "localhost",
+      httpOnly: true,
+      name: "next-auth.session-token",
+      path: "/",
+      value: sessionToken,
+    },
+  ]);
+  await page.goto(`/app/${workspaceSlug}/forms`);
+};
+
+const publishFromEditor = async (page: Page) => {
+  page.once("dialog", (dialog) => dialog.accept());
+  const publish = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/publish"),
+    { timeout: 15_000 },
+  );
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  expect((await publish).status()).toBe(201);
+  const path = await page
+    .getByRole("link", { name: "Open form" })
+    .getAttribute("href");
+  if (!path) throw new Error("The editor did not link to the published form");
+  return path;
+};
+
+const openEmbeddedForm = async (page: Page, path: string) => {
+  await page.goto("http://127.0.0.1:3000/");
+  await page.evaluate((path) => {
+    const frame = document.createElement("iframe");
+    frame.title = "Test form";
+    frame.src = `http://localhost:3000${path}?embed=1`;
+    frame.width = "600";
+    frame.height = "700";
+    document.body.append(frame);
+  }, path);
+  return page.frameLocator('iframe[title="Test form"]');
+};
+
+const selectTemplate = (page: Page, raw: string) =>
+  page.getByLabel("Template file").setInputFiles({
+    name: "registration.form-template.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(raw),
+  });
+
+test("publishes Russian system text on both surfaces and keeps the open version and retry bound together", async ({
+  page,
+  context,
+}) => {
+  test.slow();
+  const title = "Регистрация / Workshop";
+  const hint = "Как к вам обращаться?";
+  const completion = "Your seat is reserved. До встречи!";
+  await openForms(page);
+  await page.getByRole("button", { name: "New form" }).first().click();
+  await page.getByLabel("Name").fill(title);
+  await page.getByRole("button", { name: "Create form" }).click();
+  const language = page.getByLabel("Form language");
+  await expect(language).toHaveValue("en");
+  await language.selectOption({ label: "Русский" });
+  await expect(page.getByLabel("Submit button")).toHaveValue("Submit");
+  await expect(page.getByLabel("Success title")).toHaveValue("Thank you");
+  await page.getByLabel("Success title").fill("Место за вами");
+  await page.getByLabel("Success message").fill(completion);
+
+  const addField = page.getByRole("button", { name: "Add field", exact: true });
+  await addField.click();
+  await page.getByLabel("Label", { exact: true }).fill("Ваше имя");
+  await page.getByLabel("Key", { exact: true }).fill("name");
+  await page.getByLabel("Required", { exact: true }).check();
+  await page.getByLabel("Help text").fill(hint);
+  await page.getByLabel("Minimum length").fill("3");
+  await page.getByRole("button", { name: "Add field after field 1" }).click();
+  await page.getByLabel("Type", { exact: true }).nth(1).selectOption("select");
+  await page.getByLabel("Label", { exact: true }).nth(1).fill("Сеанс");
+  await page.getByLabel("Key", { exact: true }).nth(1).fill("slot");
+  await page.getByLabel("Option 1 label").fill("Saturday / Суббота");
+  const path = await publishFromEditor(page);
+  await page.reload();
+  await expect(language).toHaveValue("ru");
+
+  const hosted = await context.newPage();
+  await hosted.setViewportSize({ width: 390, height: 844 });
+  await hosted.goto(path);
+  const embedPage = await context.newPage();
+  const frame = await openEmbeddedForm(embedPage, path);
+  for (const surface of [hosted, frame]) {
+    await expect(surface.getByRole("heading", { name: title })).toBeVisible();
+    await expect(surface.locator("form")).toHaveAttribute("lang", "ru");
+    await expect(
+      surface.getByLabel("Сеанс").locator('option[value=""]'),
+    ).toHaveText("Выберите вариант");
+    await expect(
+      surface.getByLabel("Сеанс").locator('option[value="option_1"]'),
+    ).toHaveText("Saturday / Суббота");
+    await expect(
+      surface.getByLabel("Сохранять ответы на этом устройстве"),
+    ).toBeVisible();
+    await surface.getByRole("button", { name: "Submit", exact: true }).click();
+    await expect(surface.getByText("Исправьте ошибки:")).toBeVisible();
+    await expect(surface.getByLabel("Ваше имя")).toHaveAccessibleDescription(
+      `${hint} Заполните это поле`,
+    );
+  }
+  expect(
+    await hosted.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+  await frame.getByLabel("Ваше имя").fill("Анна");
+  await frame.getByLabel("Сеанс").selectOption("option_1");
+  await frame.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(
+    frame.getByRole("heading", { name: "Место за вами" }),
+  ).toBeVisible();
+  await expect(frame.getByText(completion)).toBeVisible();
+
+  const apiPath = path.replace("/f/", "/api/forms/");
+  const submitRoute = `**${apiPath}/submit`;
+  const name = hosted.getByLabel("Ваше имя");
+  await hosted.getByLabel("Сохранять ответы на этом устройстве").check();
+  await name.fill("Алексей");
+  await hosted.getByLabel("Сеанс").selectOption("option_1");
+  await expect(hosted.getByText(/^Сохранено на этом устройстве/)).toBeVisible();
+  await hosted.route(
+    submitRoute,
+    async (route) => {
+      const body = route.request().postDataJSON();
+      await route.continue({
+        postData: JSON.stringify({
+          ...body,
+          values: { ...body.values, name: "А" },
+        }),
+      });
+    },
+    { times: 1 },
+  );
+  const rejected = hosted.waitForResponse((response) =>
+    response.url().endsWith(`${apiPath}/submit`),
+  );
+  await hosted.getByRole("button", { name: "Submit", exact: true }).click();
+  const failure = await rejected;
+  expect(failure.status()).toBe(422);
+  expect(await failure.json()).toMatchObject({
+    error: {
+      message: "One or more fields are invalid",
+      fieldErrors: { name: ["Must contain at least 3 characters"] },
+      fieldIssues: { name: [{ code: "MIN_LENGTH", params: { limit: 3 } }] },
+    },
+  });
+  await expect(name).toHaveAccessibleDescription(
+    `${hint} Минимальное число символов: 3`,
+  );
+  await expect(name).toHaveValue("Алексей");
+
+  await hosted.reload();
+  await expect(name).toHaveValue("");
+  await hosted.getByRole("button", { name: "Восстановить черновик" }).click();
+  await expect(name).toHaveValue("Алексей");
+  await expect(hosted.getByLabel("Сеанс")).toHaveValue("option_1");
+  let originalKey: string | undefined;
+  let originalVersion: string | undefined;
+  await hosted.route(
+    submitRoute,
+    async (route) => {
+      originalKey = route.request().headers()["idempotency-key"];
+      originalVersion = route.request().postDataJSON().versionId;
+      const accepted = await route.fetch();
+      expect(accepted.status()).toBe(201);
+      await route.abort("failed");
+    },
+    { times: 1 },
+  );
+  await hosted.getByRole("button", { name: "Submit", exact: true }).click();
+  const retry = hosted.getByRole("button", {
+    name: "Повторить отправку прежних ответов",
+  });
+  await expect(retry).toBeVisible();
+  await expect(
+    hosted.getByText("Не удалось отправить ответ. Попробуйте ещё раз."),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download saved draft" }).click();
+  const raw = await readFile(await (await download).path(), "utf8");
+  expect(JSON.parse(raw).form.settings).toMatchObject({
+    language: "ru",
+    successMessage: completion,
+  });
+
+  await language.selectOption({ label: "English" });
+  await publishFromEditor(page);
+  const latest = await context.newPage();
+  await latest.goto(path);
+  await expect(latest.locator("form")).toHaveAttribute("lang", "en");
+  await expect(
+    latest.getByLabel("Сеанс").locator('option[value=""]'),
+  ).toHaveText("Select an option");
+  await expect(
+    latest.getByText(/Saved answers exist for a different published version/),
+  ).toBeVisible();
+  await expect(latest.getByLabel("Ваше имя")).toHaveValue("");
+  await expect(
+    latest.getByRole("button", { name: "Resume", exact: true }),
+  ).toHaveCount(0);
+  await expect(hosted.locator("form")).toHaveAttribute("lang", "ru");
+  const replayed = hosted.waitForResponse((response) =>
+    response.url().endsWith(`${apiPath}/submit`),
+  );
+  await retry.click();
+  const replay = await replayed;
+  expect(replay.status()).toBe(200);
+  expect(await replay.json()).toMatchObject({ data: { duplicate: true } });
+  expect(replay.request().headers()["idempotency-key"]).toBe(originalKey);
+  expect(replay.request().postDataJSON().versionId).toBe(originalVersion);
+  await expect(hosted.getByText(completion)).toBeVisible();
+
+  await openForms(page);
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+  await selectTemplate(page, raw);
+  await page.getByRole("button", { name: "Create draft" }).click();
+  await expect(language).toHaveValue("ru");
+  const imported = await publishFromEditor(page);
+  expect(imported).not.toBe(path);
+  await hosted.goto(imported);
+  await expect(
+    hosted.getByLabel("Сеанс").locator('option[value=""]'),
+  ).toHaveText("Выберите вариант");
+
+  await page.getByLabel("Pause responses").check();
+  const saveIntake = page.getByRole("button", { name: "Save intake settings" });
+  await saveIntake.click();
+  await expect(page.getByText("Intake settings saved")).toBeVisible();
+  await name.fill("Борис");
+  const closedReply = hosted.waitForResponse((response) =>
+    response.url().endsWith(`${imported.replace("/f/", "/api/forms/")}/submit`),
+  );
+  await hosted.getByRole("button", { name: "Submit", exact: true }).click();
+  const closedResponse = await closedReply;
+  expect(closedResponse.status()).toBe(409);
+  expect(await closedResponse.json()).toMatchObject({
+    error: {
+      code: "CONFLICT",
+      message: "This form is no longer accepting responses.",
+      closedIntake: { customMessage: null },
+    },
+  });
+  const closed = "Эта форма больше не принимает ответы.";
+  await expect(hosted.getByText(closed)).toBeVisible();
+  await hosted.reload();
+  await expect(hosted.getByRole("main")).toHaveAttribute("lang", "ru");
+  await expect(hosted.getByText(closed)).toBeVisible();
+  const closedFrame = await openEmbeddedForm(embedPage, imported);
+  await expect(closedFrame.getByText(closed)).toBeVisible();
+
+  const customClosed = "This form is no longer accepting responses.";
+  await page.getByLabel("Closed intake message").fill(customClosed);
+  await saveIntake.click();
+  await expect(page.getByText("Intake settings saved")).toBeVisible();
+  await hosted.reload();
+  await expect(hosted.getByText(customClosed)).toBeVisible();
+});
+
+test("rejects an unsupported template language and publishes older templates in English", async ({
+  page,
+}) => {
+  const template = createFormTemplate({
+    ...defaultFormSchema(),
+    title: "Legacy language fixture",
+    fields: [
+      {
+        type: "select",
+        id: crypto.randomUUID(),
+        key: "choice",
+        label: "Choice",
+        required: true,
+        width: "full",
+        options: [{ label: "Option", value: "option" }],
+      },
+    ],
+  });
+  const { language: _language, ...settings } = template.form.settings;
+  await openForms(page);
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+  await selectTemplate(
+    page,
+    JSON.stringify({
+      ...template,
+      form: { ...template.form, settings: { ...settings, language: "fr" } },
+    }),
+  );
+  await expect(page.getByRole("alert")).toContainText("form.settings.language");
+  await expect(
+    page.getByRole("button", { name: "Create draft" }),
+  ).toBeDisabled();
+  await selectTemplate(
+    page,
+    JSON.stringify({ ...template, form: { ...template.form, settings } }),
+  );
+  await page.getByRole("button", { name: "Create draft" }).click();
+  await expect(page.getByLabel("Form language")).toHaveValue("en");
+  const path = await publishFromEditor(page);
+  await page.goto(path);
+  await expect(page.locator("form")).toHaveAttribute("lang", "en");
+  await expect(
+    page.getByLabel("Choice").locator('option[value=""]'),
+  ).toHaveText("Select an option");
 });

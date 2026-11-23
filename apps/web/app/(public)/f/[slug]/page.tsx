@@ -21,6 +21,7 @@ export default async function HostedFormPage({
 
   return (
     <HostedForm
+      key={published.version.id}
       compact={query.embed === "1"}
       collectMetadata={published.form.collectMetadata}
       closedMessage={

@@ -1,5 +1,6 @@
 "use client";
 
+import { FormSubmissionError } from "@form-forge/form-renderer";
 import {
   normalizeSubmission,
   sanitizePartialAnswers,
@@ -9,6 +10,7 @@ import {
 } from "@form-forge/form-schema";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { getPublicFormMessages } from "@/lib/public-form-messages";
 import {
   DRAFT_TTL_MS,
   discoverLocalDrafts,
@@ -27,16 +29,12 @@ import {
   rememberSessionAttempt,
 } from "./submission-attempt";
 
-const storageMessage =
-  "Local storage is unavailable or full. Your latest changes are not saved. You can turn off saving and continue filling out this form.";
-const changedAttemptMessage =
-  "Retry the original attempt or explicitly start a new attempt before submitting changed answers.";
-
 export const useLocalDraft = (
   schema: FormSchemaV1,
   slug: string,
   versionId: string,
 ) => {
+  const messages = getPublicFormMessages(schema.settings.language);
   const [enabled, setEnabled] = useState(false);
   const [pending, setPending] = useState<LocalDraftRecord | null>(null);
   const [incompatible, setIncompatible] = useState<LocalDraftRecord[]>([]);
@@ -113,10 +111,10 @@ export const useLocalDraft = (
         // Storage denial is reported below without exposing stored values.
       }
       setSaving(false);
-      setError(storageMessage);
+      setError(messages.storageError);
       return false;
     }
-  }, [pause, schema]);
+  }, [messages, pause, schema]);
 
   useEffect(() => {
     identity.current = { origin: window.location.origin, slug, versionId };
@@ -126,9 +124,12 @@ export const useLocalDraft = (
       setIncompatible(discovered.incompatible);
       // Discovery may be replayed in React StrictMode after its cleanup has
       // already removed damaged/expired records. Keep the first explanation.
-      if (discovered.notices.length) setNotice(discovered.notices.join(" "));
+      if (discovered.notices.length)
+        setNotice(
+          discovered.notices.map((notice) => messages[notice]).join(" "),
+        );
     } catch {
-      setError(storageMessage);
+      setError(messages.storageError);
     }
     const reconcile = (event?: StorageEvent) => {
       if (
@@ -157,7 +158,7 @@ export const useLocalDraft = (
         }
       } catch {
         cancel();
-        setError(storageMessage);
+        setError(messages.storageError);
       }
     };
     const onFocus = () => reconcile();
@@ -179,7 +180,7 @@ export const useLocalDraft = (
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("pagehide", flush);
     };
-  }, [cancel, pause, persist, slug, updateAttempt, versionId]);
+  }, [cancel, messages, pause, persist, slug, updateAttempt, versionId]);
 
   const onAnswersChange = useCallback(
     (value: NormalizedSubmission) => {
@@ -217,9 +218,7 @@ export const useLocalDraft = (
         current.current = null;
         setError(undefined);
       } catch {
-        setError(
-          "The saved response could not be removed. Local storage may be unavailable or another tab changed it.",
-        );
+        setError(messages.removeError);
       }
     }
   };
@@ -235,9 +234,7 @@ export const useLocalDraft = (
         JSON.stringify(normalized.receivedValues) !==
           JSON.stringify(record.attempt.values)
       ) {
-        setError(
-          "The saved submission attempt is incompatible with this schema. It was not restored. Discard it to continue.",
-        );
+        setError(messages.invalidAttempt);
         return;
       }
     }
@@ -250,9 +247,7 @@ export const useLocalDraft = (
       answers: sanitized.answers,
     });
     setNotice(
-      sanitized.droppedKeys.length
-        ? "Some saved answers were invalid or hidden and were omitted. Review the form before submitting."
-        : undefined,
+      sanitized.droppedKeys.length ? messages.omittedAnswers : undefined,
     );
     active.current = true;
     paused.current = false;
@@ -281,10 +276,10 @@ export const useLocalDraft = (
         setConflict(false);
         setPending(null);
         setSavedAt(undefined);
-        setNotice("The saved response was removed or expired in another tab.");
+        setNotice(messages.removedInAnotherTab);
       }
     } catch {
-      setError(storageMessage);
+      setError(messages.storageError);
     }
   };
   const performDiscard = () => {
@@ -310,9 +305,7 @@ export const useLocalDraft = (
       setConfirmDiscard(false);
       uncertain.current = false;
     } catch {
-      setError(
-        "The saved response could not be removed. Local storage may be unavailable or another tab changed it. Choose Use saved answers to inspect the current revision.",
-      );
+      setError(messages.discardError);
     }
   };
 
@@ -329,34 +322,29 @@ export const useLocalDraft = (
     context?: SubmissionContext,
   ) => {
     if (paused.current || pending)
-      throw new Error("Resolve the saved response before submitting.");
+      throw new FormSubmissionError(messages.resolveDraft);
     if (uncertain.current) {
       setConfirmNew(true);
-      throw new Error(changedAttemptMessage);
+      throw new FormSubmissionError(messages.changedAttempt);
     }
     const existing = attemptRef.current;
     if (existing) {
       if (JSON.stringify(existing.values) !== JSON.stringify(values))
-        throw new Error(changedAttemptMessage);
+        throw new FormSubmissionError(messages.changedAttempt);
       if (active.current) {
         cancel();
-        if (!persist())
-          throw new Error(
-            "The retry could not be saved. Resolve the storage error before retrying.",
-          );
+        if (!persist()) throw new FormSubmissionError(messages.retryNotSaved);
       }
       return existing;
     }
     const preparedGeneration = generation.current;
     const digest = await attemptDigest(versionId, values);
     if (preparedGeneration !== generation.current || paused.current)
-      throw new Error(
-        "The form changed while preparing the attempt. Please try again.",
-      );
+      throw new FormSubmissionError(messages.formChanged);
     const session = readSessionAttempt(slug, versionId);
     if (session.unknown || (session.digest && session.digest !== digest)) {
       setConfirmNew(true);
-      throw new Error(changedAttemptMessage);
+      throw new FormSubmissionError(messages.changedAttempt);
     }
     const created: LocalSubmissionAttempt = {
       key: session.key,
@@ -368,10 +356,7 @@ export const useLocalDraft = (
     rememberSessionAttempt(slug, versionId, created.key, digest);
     if (active.current) {
       cancel();
-      if (!persist())
-        throw new Error(
-          "The submission attempt could not be saved. Turn off saving to submit without reload recovery, then try again.",
-        );
+      if (!persist()) throw new FormSubmissionError(messages.attemptNotSaved);
     }
     return created;
   };
@@ -398,9 +383,7 @@ export const useLocalDraft = (
       current.current = null;
       setError(undefined);
     } catch {
-      setError(
-        "Your response was sent, but its local copy could not be removed. Remove saved site data on this device when storage becomes available.",
-      );
+      setError(messages.submittedCleanupError);
     }
   };
   const validationRejected = () => {
@@ -414,7 +397,7 @@ export const useLocalDraft = (
       try {
         current.current = readLocalDraft(identity.current);
       } catch {
-        setError(storageMessage);
+        setError(messages.storageError);
         return;
       }
       paused.current = false;
@@ -439,7 +422,7 @@ export const useLocalDraft = (
       setConflict(false);
       if (persist()) setEnabled(true);
     } catch {
-      setError(storageMessage);
+      setError(messages.storageError);
     }
   };
   const deleteIncompatible = () => {
@@ -448,7 +431,7 @@ export const useLocalDraft = (
         removeLocalDraft(record, record.revision);
       setIncompatible([]);
     } catch {
-      setError(storageMessage);
+      setError(messages.storageError);
     }
   };
 

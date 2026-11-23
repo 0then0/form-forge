@@ -512,6 +512,12 @@ test("restores and submits an embedded form while updating its height", async ({
   }, form.slug);
   await page.addScriptTag({ url: "/embed.js" });
   const frame = page.frameLocator("#draft-frame");
+  const height = () =>
+    page
+      .locator("#draft-frame")
+      .evaluate((node) => Number.parseInt(node.style.height, 10));
+  // The bridge measures the frame after hydration. Wait before using the checkbox.
+  await expect.poll(height).toBeGreaterThan(0);
   await frame.getByLabel("Save answers on this device").check();
   await frame
     .getByRole("textbox", { name: "Name", exact: true })
@@ -528,10 +534,6 @@ test("restores and submits an embedded form while updating its height", async ({
   await expect(
     frame.getByRole("textbox", { name: "Name", exact: true }),
   ).toHaveValue("Embedded save");
-  const height = () =>
-    page
-      .locator("#draft-frame")
-      .evaluate((node) => Number.parseInt(node.style.height, 10));
   const before = await height();
   await frame.getByLabel("More details", { exact: true }).check();
   await expect.poll(height).toBeGreaterThan(before);
