@@ -7,6 +7,8 @@ release also includes detailed upgrade instructions.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-23
+
 ### Added
 
 - Choose English or Russian for each published form's system messages on the
@@ -107,7 +109,8 @@ for maintenance and rollback requirements.
 See the [0.1.0 release notes](https://github.com/0then0/form-forge/releases/tag/v0.1.0)
 for upgrade limitations and the earlier release candidates.
 
-[Unreleased]: https://github.com/0then0/form-forge/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/0then0/form-forge/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/0then0/form-forge/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/0then0/form-forge/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/0then0/form-forge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/0then0/form-forge/compare/v0.2.0...v0.3.0

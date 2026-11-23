@@ -1,22 +1,23 @@
-# 0.5.0
+# 0.6.0
 
-Editors and owners can mark selected responses from one form on the current
-Submissions page as processed. The operation updates processing status and records
-audit entries in one transaction. If any selected response is unavailable, the
-batch is canceled and the list refreshes with the current filters.
+Choose English or Russian for each published form. Hosted and embedded forms use
+the same language for validation, local drafts, submission retries and default
+closed messages. Saved author text is displayed as written. Form templates carry
+the language setting, and older definitions default to English. The submission
+API includes stable field error codes alongside its English messages.
 
-Submissions now has previous and next page controls, and response cursors retain
-PostgreSQL timestamp precision. The batch endpoint is documented in OpenAPI.
+## Upgrade from 0.5.0
 
-## Upgrade from 0.4.0
+Back up your installation and keys, then follow the
+[installation guide](README.md) to update the source, apply migrations and
+rebuild the images. Migration `0007_default_closed_message` changes the database
+default for new forms. It preserves existing closed messages. No new environment
+variables are required.
 
-Back up your installation and keys, then update the source and rebuild the images
-using the [installation guide](README.md). There are no new database migrations
-or environment variables. Version 0.4.0 can still read processing statuses and
-audit entries written by this release. Downgrading removes the batch action and
-its API endpoint.
+Older application versions reject definitions and templates that contain the
+language setting. For a rollback with those definitions, restore the
+pre-upgrade backup and follow the [verification guide](VERIFICATION.md).
 
 ## Verification
 
-See [verification](VERIFICATION.md) for the checks and their scope. The release
-includes the source archive, its provenance and SHA-256 checksums.
+The release includes a source archive with provenance and SHA-256 checksums.
