@@ -1,7 +1,9 @@
 import { z } from "zod";
 
 import {
+  MAX_FIELD_KEY_LENGTH,
   MAX_LONG_TEXT_LENGTH,
+  MAX_SELECT_OPTION_VALUE_LENGTH,
   MAX_SHORT_TEXT_LENGTH,
   MAX_SUBMISSION_FIELDS,
 } from "./limits";
@@ -34,7 +36,7 @@ const visibilityRuleSchema = z
 
 const baseFieldShape = {
   id: z.uuid(),
-  key: z.string().min(1).max(64).regex(IDENTIFIER_PATTERN),
+  key: z.string().min(1).max(MAX_FIELD_KEY_LENGTH).regex(IDENTIFIER_PATTERN),
   label: z.string().trim().min(1).max(120),
   description: z.string().trim().max(500).optional(),
   required: z.boolean(),
@@ -149,13 +151,14 @@ const selectFieldSchema = z
   .object({
     ...baseFieldShape,
     type: z.literal("select"),
+    allowPrefill: z.boolean().optional(),
     placeholder: placeholderSchema,
     options: z
       .array(
         z
           .object({
             label: z.string().trim().min(1).max(120),
-            value: z.string().min(1).max(120),
+            value: z.string().min(1).max(MAX_SELECT_OPTION_VALUE_LENGTH),
           })
           .strict(),
       )

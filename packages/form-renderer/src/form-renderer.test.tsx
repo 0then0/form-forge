@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { FormSchemaV1 } from "@form-forge/form-schema";
 import { describe, expect, it, vi } from "vitest";
 
 import { FormRenderer } from "./form-renderer";
@@ -25,6 +26,108 @@ const schema = {
 };
 
 describe("FormRenderer", () => {
+  it("seeds visibility and an editable select once, including across hide and show", async () => {
+    const user = userEvent.setup();
+    const onAnswersChange = vi.fn();
+    const onSubmit = vi.fn();
+    const base = { required: false, width: "full" as const };
+    const conditionalSchema: FormSchemaV1 = {
+      ...schema,
+      fields: [
+        { ...base, id: "hide", key: "hide", label: "Hide", type: "checkbox" },
+        {
+          ...base,
+          id: "meeting",
+          key: "meeting",
+          label: "Meeting",
+          type: "select",
+          allowPrefill: true,
+          options: [
+            { label: "Workshop", value: "workshop" },
+            { label: "Evening", value: "evening" },
+          ],
+          visibility: { fieldKey: "hide", operator: "isEmpty" },
+        },
+        {
+          ...base,
+          id: "topic",
+          key: "topic",
+          label: "Topic",
+          type: "shortText",
+          visibility: {
+            fieldKey: "meeting",
+            operator: "equals",
+            value: "workshop",
+          },
+        },
+      ],
+    };
+    const props = { schema: conditionalSchema, onAnswersChange, onSubmit };
+    const initialSelect = { fieldKey: "meeting", value: "workshop" };
+    const { rerender } = render(
+      <FormRenderer {...props} initialSelect={initialSelect} />,
+    );
+    const meeting = screen.getByLabelText("Meeting");
+    expect(meeting).toHaveValue("workshop");
+    expect(screen.getByLabelText("Topic")).toBeVisible();
+    expect(onAnswersChange).toHaveBeenCalled();
+    for (const [answers] of onAnswersChange.mock.calls) {
+      expect(answers).toMatchObject({ meeting: "workshop" });
+    }
+
+    rerender(
+      <FormRenderer
+        {...props}
+        initialSelect={{ ...initialSelect, value: "evening" }}
+      />,
+    );
+    expect(meeting).toHaveValue("workshop");
+
+    await user.selectOptions(meeting, "evening");
+    expect(screen.queryByLabelText("Topic")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ meeting: "evening" }),
+    );
+
+    await user.click(screen.getByLabelText("Hide"));
+    expect(screen.queryByLabelText("Meeting")).not.toBeInTheDocument();
+    await user.click(screen.getByLabelText("Hide"));
+    expect(screen.getByLabelText("Meeting")).toHaveValue("");
+  });
+
+  it("replaces a prefilled select when restoring an empty answer set", () => {
+    const selectSchema: FormSchemaV1 = {
+      ...schema,
+      fields: [
+        {
+          id: "meeting",
+          key: "meeting",
+          label: "Meeting",
+          required: false,
+          width: "full",
+          type: "select",
+          allowPrefill: true,
+          options: [{ label: "Workshop", value: "workshop" }],
+        },
+      ],
+    };
+    const props = {
+      schema: selectSchema,
+      initialSelect: { fieldKey: "meeting", value: "workshop" },
+      onSubmit: vi.fn(),
+    };
+    const { rerender } = render(<FormRenderer {...props} />);
+    expect(screen.getByLabelText("Meeting")).toHaveValue("workshop");
+    rerender(
+      <FormRenderer
+        {...props}
+        restoreAnswers={{ revision: "1", answers: {} }}
+      />,
+    );
+    expect(screen.getByLabelText("Meeting")).toHaveValue("");
+  });
+
   it("restores every supported field type while preserving incomplete input", async () => {
     const base = { required: false, width: "full" as const };
     const onAnswersChange = vi.fn();

@@ -10,6 +10,8 @@ const english = {
   rateLimited: "Too many submissions. Please try again later.",
   retryFailed: "Retry failed. Please try again.",
   poweredBy: "Powered by",
+  prefilledAnswer:
+    "This link preselected an answer. The value is visible in the URL. You can change the answer.",
   theme: defaultThemeLabels,
   savedResponse: "Saved response",
   incompatible:
@@ -81,6 +83,8 @@ const messages: Record<FormLanguage, typeof english> = {
     rateLimited: "Слишком много попыток отправки. Повторите позже.",
     retryFailed: "Не удалось повторить отправку. Попробуйте ещё раз.",
     poweredBy: "Работает на",
+    prefilledAnswer:
+      "Ответ подставлен из ссылки. Значение видно в URL. Вы можете изменить ответ.",
     theme: {
       group: "Цветовая тема",
       system: "Системная тема",

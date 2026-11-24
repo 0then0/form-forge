@@ -82,6 +82,7 @@ export type SelectOption = {
 
 export type SelectField = BaseField & {
   type: "select";
+  allowPrefill?: boolean | undefined;
   placeholder?: string | undefined;
   options: SelectOption[];
 };

@@ -4,6 +4,7 @@ import {
   FormRenderer,
   FormSubmissionError,
   rendererMessages,
+  type FormRendererProps,
 } from "@form-forge/form-renderer";
 import {
   DEFAULT_FORM_LANGUAGE,
@@ -64,20 +65,30 @@ const getContext = (): SubmissionContext => {
 };
 
 export const HostedForm = ({
-  compact = false,
+  compact: initialCompact = false,
   collectMetadata = false,
   closedMessage,
-  schema,
+  prefill,
+  schema: initialSchema,
   slug,
-  versionId,
+  versionId: initialVersionId,
 }: {
   compact?: boolean;
   collectMetadata?: boolean;
   closedMessage?: string | undefined;
+  prefill?: FormRendererProps["initialSelect"];
   schema: FormSchemaV1;
   slug: string;
   versionId: string;
 }) => {
+  // A query-only navigation may request fresh server props for the same form.
+  // Keep the opened response bound to its original version and layout.
+  const [{ compact, initialSelect, schema, versionId }] = useState(() => ({
+    compact: initialCompact,
+    initialSelect: prefill,
+    schema: initialSchema,
+    versionId: initialVersionId,
+  }));
   const language = schema.settings.language ?? DEFAULT_FORM_LANGUAGE;
   const messages = getPublicFormMessages(language);
   const [submitted, setSubmitted] = useState(false);
@@ -134,7 +145,7 @@ export const HostedForm = ({
     setSubmitted(true);
   };
   const submit = async (values: NormalizedSubmission) => {
-    if (busy.current) return;
+    if (busy.current || closedMessage) return;
     busy.current = true;
     setSending(true);
     setRetryError(undefined);
@@ -173,7 +184,7 @@ export const HostedForm = ({
     />
   );
 
-  const content = closedMessage ? (
+  const formStatus = closedMessage ? (
     <div role="status">
       <h1 className="text-2xl font-semibold">{schema.title}</h1>
       <p className="mt-4">{closedMessage}</p>
@@ -201,16 +212,38 @@ export const HostedForm = ({
           {retryError}
         </p>
       ) : null}
-      <div className="[&_form>button]:mt-7 [&_form>[data-form-fields]]:grid [&_form>[data-form-fields]]:gap-5 [&_form>[data-form-fields]]:sm:grid-cols-2">
-        <FormRenderer
-          components={webRendererComponents}
-          schema={schema}
-          onSubmit={submit}
-          disabled={Boolean(draft.pending) || draft.conflict || sending}
-          restoreAnswers={draft.restoreAnswers}
-          onAnswersChange={draft.onAnswersChange}
-        />
-      </div>
+      {initialSelect && !draft.restoreAnswers ? (
+        <p className="mb-4 text-sm text-slate-600">
+          {messages.prefilledAnswer}
+        </p>
+      ) : null}
+    </>
+  );
+
+  const content = (
+    <>
+      {formStatus}
+      {submitted ? null : (
+        // A change to intake can hide a form while the same response is open.
+        <div
+          hidden={Boolean(closedMessage)}
+          className="[&_form>button]:mt-7 [&_form>[data-form-fields]]:grid [&_form>[data-form-fields]]:gap-5 [&_form>[data-form-fields]]:sm:grid-cols-2"
+        >
+          <FormRenderer
+            components={webRendererComponents}
+            schema={schema}
+            onSubmit={submit}
+            disabled={
+              Boolean(closedMessage || draft.pending) ||
+              draft.conflict ||
+              sending
+            }
+            initialSelect={initialSelect}
+            restoreAnswers={draft.restoreAnswers}
+            onAnswersChange={draft.onAnswersChange}
+          />
+        </div>
+      )}
     </>
   );
 

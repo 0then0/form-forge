@@ -98,6 +98,7 @@ const fields = (): FormSchemaV1["fields"] => {
       key: "choice",
       label: "Choice",
       type: "select",
+      allowPrefill: true,
       options: [
         { label: "Option A", value: "a" },
         { label: "Option B", value: "b" },
@@ -324,7 +325,11 @@ test("retries a committed submission after losing its response without consuming
   let originalKey = "";
   try {
     let visitor = await context.newPage();
-    await visitor.goto(`http://localhost:3000/f/${form.slug}`);
+    const url = `http://localhost:3000/f/${form.slug}`;
+    await visitor.goto(`${url}?prefill=choice%3Aa`);
+    await expect(visitor.getByLabel("Choice", { exact: true })).toHaveValue(
+      "a",
+    );
     await visitor.getByLabel("Save answers on this device").check();
     await visitor
       .getByRole("textbox", { name: "Name", exact: true })
@@ -367,8 +372,12 @@ test("retries a committed submission after losing its response without consuming
       headless: true,
     });
     visitor = await context.newPage();
-    await visitor.goto(`http://localhost:3000/f/${form.slug}`);
+    await visitor.goto(`${url}?prefill=choice%3Ab`);
+    const choice = visitor.getByLabel("Choice", { exact: true });
+    await expect(choice).toHaveValue("b");
     await visitor.getByRole("button", { name: "Resume", exact: true }).click();
+    await expect(choice).toHaveValue("a");
+    await choice.selectOption("b");
     await visitor
       .getByRole("textbox", { name: "Name", exact: true })
       .fill("Changed after reload");

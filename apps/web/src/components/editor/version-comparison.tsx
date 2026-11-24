@@ -19,6 +19,10 @@ const fieldProperties = (field: FormField | undefined): Property[] => {
     { label: "Type", value: field.type },
     { label: "Required", value: field.required ? "Yes" : "No" },
     {
+      label: "Allow prefilling from a link",
+      value: field.type === "select" ? (field.allowPrefill ? "Yes" : "No") : "",
+    },
+    {
       label: "Link text",
       value: field.type === "checkbox" ? (field.link?.label ?? "") : "",
     },

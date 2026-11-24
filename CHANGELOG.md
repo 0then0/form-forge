@@ -7,6 +7,12 @@ release also includes detailed upgrade instructions.
 
 ## [Unreleased]
 
+### Added
+
+- Share links with a preselected option for an enabled select field in the
+  published form or iframe. Respondents can change the selection, and resumed
+  drafts restore their own answers. Form templates carry the field permission.
+
 ## [0.6.0] - 2026-11-23
 
 ### Added

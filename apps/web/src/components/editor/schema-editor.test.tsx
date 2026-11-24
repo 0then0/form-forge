@@ -61,6 +61,56 @@ describe("SchemaEditor", () => {
   });
   afterAll(() => server.close());
 
+  it("distinguishes published prefill options with the same label", async () => {
+    const publishedSchema: FormSchemaV1 = {
+      ...schema,
+      fields: [
+        {
+          id: "22222222-2222-4222-8222-222222222222",
+          key: "meeting",
+          label: "Meeting",
+          required: false,
+          width: "full",
+          type: "select",
+          allowPrefill: true,
+          options: [
+            { label: "Workshop", value: "morning" },
+            { label: "Workshop", value: "evening" },
+          ],
+        },
+      ],
+    };
+    const user = userEvent.setup();
+    render(
+      <SchemaEditor
+        canEdit
+        formId="form-id"
+        initialDraftRevision={revision}
+        initialSchema={schema}
+        publicBaseUrl="http://localhost:3000"
+        publicSlug="contact"
+        published
+        versions={[
+          {
+            id: "version-id",
+            publishedAt: revision,
+            schema: publishedSchema,
+            versionNumber: 1,
+          },
+        ]}
+        workspaceSlug="workspace"
+      />,
+      { wrapper },
+    );
+    await user.selectOptions(
+      screen.getByLabelText("Meeting option"),
+      screen.getByRole("option", { name: "Workshop (evening)" }),
+    );
+    expect(screen.getByRole("textbox", { name: "Link" })).toHaveValue(
+      "http://localhost:3000/f/contact?prefill=meeting%3Aevening",
+    );
+  });
+
   it("publishes the displayed schema and expected revision atomically", async () => {
     let requestBody: unknown;
     let draftSaveCount = 0;

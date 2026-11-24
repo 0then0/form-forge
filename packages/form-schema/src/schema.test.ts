@@ -80,6 +80,22 @@ describe("FormSchemaV1", () => {
     expect(formSchemaV1Schema.safeParse(invalid).success).toBe(false);
   });
 
+  it("only accepts prefill permission on select fields", () => {
+    const [select, text] = schema.fields;
+    expect(
+      formSchemaV1Schema.safeParse({
+        ...schema,
+        fields: [{ ...select, allowPrefill: true }, text],
+      }).success,
+    ).toBe(true);
+    expect(
+      formSchemaV1Schema.safeParse({
+        ...schema,
+        fields: [select, { ...text, allowPrefill: true }],
+      }).success,
+    ).toBe(false);
+  });
+
   it("removes hidden values and applies webhook keys", () => {
     const result = normalizeSubmission(schema, {
       company: "should not persist",

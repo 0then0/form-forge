@@ -815,8 +815,10 @@ const openEmbeddedForm = async (page: Page, path: string) => {
   await page.goto("http://127.0.0.1:3000/");
   await page.evaluate((path) => {
     const frame = document.createElement("iframe");
+    const url = new URL(path, "http://localhost:3000");
+    url.searchParams.set("embed", "1");
     frame.title = "Test form";
-    frame.src = `http://localhost:3000${path}?embed=1`;
+    frame.src = url.href;
     frame.width = "600";
     frame.height = "700";
     document.body.append(frame);
@@ -830,6 +832,155 @@ const selectTemplate = (page: Page, raw: string) =>
     mimeType: "application/json",
     buffer: Buffer.from(raw),
   });
+
+test("copies a prefilled link from the published version and honors edits and drafts on public forms", async ({
+  page,
+  context,
+}) => {
+  test.slow();
+  const workshop = "Встреча 🗓 + Q&A #1: утро";
+  await openForms(page);
+  await page.getByRole("button", { name: "New form" }).first().click();
+  await page.getByLabel("Name").fill("Meeting registration");
+  await page.getByRole("button", { name: "Create form" }).click();
+
+  await page.getByRole("button", { name: "Add field", exact: true }).click();
+  await page.getByLabel("Type", { exact: true }).selectOption("select");
+  await page.getByLabel("Label", { exact: true }).fill("Meeting");
+  await page.getByLabel("Key", { exact: true }).fill("meeting");
+  await page.getByLabel("Option 1 label").fill("Workshop");
+  await page.getByLabel("Option 1 value").fill(workshop);
+  await page.getByRole("button", { name: "Add option", exact: true }).click();
+  await page.getByLabel("Option 2 label").fill("Evening meeting");
+  await page.getByLabel("Option 2 value").fill("evening");
+  const allowPrefill = page.getByLabel("Allow prefilling from a link");
+  await allowPrefill.check();
+  await page.getByRole("button", { name: "Add field after field 1" }).click();
+  await page.getByLabel("Label", { exact: true }).nth(1).fill("Workshop topic");
+  await page.getByLabel("Required", { exact: true }).nth(1).check();
+  await page.getByLabel("Visibility source field").selectOption("meeting");
+  await page.getByLabel("Visibility comparison value").selectOption(workshop);
+  const path = await publishFromEditor(page);
+
+  await allowPrefill.uncheck();
+  await page.getByLabel("Option 1 label").fill("Revised workshop");
+  await page.getByLabel("Option 1 value").fill("revised");
+  await page.getByRole("button", { name: "Save draft" }).click();
+  await expect(page.getByText("Draft saved", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(allowPrefill).not.toBeChecked();
+  const publishedOption = page.getByLabel("Meeting option", { exact: true });
+  await expect(
+    publishedOption.getByRole("option", { name: "Workshop", exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    publishedOption.getByRole("option", { name: "Revised workshop" }),
+  ).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: "http://localhost:3000",
+  });
+  await publishedOption.selectOption({ label: "Workshop" });
+  await page.getByRole("button", { name: "Copy link", exact: true }).click();
+  await expect(page.getByText("Link copied", { exact: true })).toBeVisible();
+  const link = new URL(
+    await page.evaluate(() => navigator.clipboard.readText()),
+  );
+  expect(link.pathname).toBe(path);
+  expect(link.searchParams.getAll("prefill")).toEqual([`meeting:${workshop}`]);
+
+  const hosted = await context.newPage();
+  await hosted.goto(link.href);
+  const embedPage = await context.newPage();
+  const frame = await openEmbeddedForm(embedPage, link.href);
+  for (const [tab, surface] of [
+    [hosted, hosted],
+    [embedPage, frame],
+  ] as const) {
+    const meeting = surface.getByLabel("Meeting", { exact: true });
+    const topic = surface.getByRole("textbox", { name: "Workshop topic" });
+    await expect(meeting).toHaveValue(workshop);
+    await expect(
+      surface.getByText(/The value is visible in the URL/),
+    ).toBeVisible();
+    await expect(topic).toBeVisible();
+    await topic.fill("Only for the workshop");
+    await meeting.selectOption("evening");
+    await expect(topic).toHaveCount(0);
+    if (tab === hosted) {
+      await hosted.evaluate(
+        (path) => history.replaceState(null, "", path),
+        path,
+      );
+      await expect(meeting).toHaveValue("evening");
+    }
+    const submitted = tab.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith("/submit"),
+    );
+    await surface.getByRole("button", { name: "Submit", exact: true }).click();
+    const response = await submitted;
+    expect(response.status()).toBe(201);
+    expect(response.request().postDataJSON().values).toEqual({
+      meeting: "evening",
+    });
+    await expect(
+      surface.getByRole("heading", { name: "Thank you" }),
+    ).toBeVisible();
+  }
+
+  const duplicated = new URL(link);
+  duplicated.searchParams.append("prefill", `meeting:${workshop}`);
+  await hosted.goto(duplicated.href);
+  const meeting = hosted.getByLabel("Meeting", { exact: true });
+  await expect(meeting).toHaveValue("");
+  await expect(hosted.getByText(/The value is visible in the URL/)).toHaveCount(
+    0,
+  );
+
+  await hosted.goto(link.href);
+  await meeting.selectOption("evening");
+  await hosted.getByLabel("Save answers on this device").check();
+  await expect(hosted.getByText(/Saved on this device at/)).toBeVisible();
+  await hosted.reload();
+  await hosted.getByRole("button", { name: "Resume", exact: true }).click();
+  await expect(meeting).toHaveValue("evening");
+  await expect(
+    hosted.getByRole("textbox", { name: "Workshop topic" }),
+  ).toHaveCount(0);
+  await meeting.selectOption("");
+  await expect(hosted.getByText("Saving changes…")).toBeVisible();
+  await expect(hosted.getByText(/Saved on this device at/)).toBeVisible();
+  await hosted.reload();
+  await expect(meeting).toHaveValue(workshop);
+  await hosted.getByRole("button", { name: "Resume", exact: true }).click();
+  await expect(meeting).toHaveValue("");
+  await expect(hosted.getByText(/The value is visible in the URL/)).toHaveCount(
+    0,
+  );
+
+  await allowPrefill.check();
+  await publishFromEditor(page);
+  await expect(
+    publishedOption.getByRole("option", { name: "Revised workshop" }),
+  ).toHaveCount(1);
+  await hosted.reload();
+  await expect(meeting).toHaveValue("");
+  await expect(
+    hosted.getByRole("textbox", { name: "Workshop topic" }),
+  ).toHaveCount(0);
+
+  await allowPrefill.uncheck();
+  await publishFromEditor(page);
+  await expect(
+    page.getByRole("heading", { name: "Prefilled links" }),
+  ).toHaveCount(0);
+  const revised = new URL(link);
+  revised.searchParams.set("prefill", "meeting:revised");
+  await hosted.goto(revised.href);
+  await expect(meeting).toHaveValue("");
+});
 
 test("publishes Russian system text on both surfaces and keeps the open version and retry bound together", async ({
   page,
@@ -863,15 +1014,17 @@ test("publishes Russian system text on both surfaces and keeps the open version 
   await page.getByLabel("Label", { exact: true }).nth(1).fill("Сеанс");
   await page.getByLabel("Key", { exact: true }).nth(1).fill("slot");
   await page.getByLabel("Option 1 label").fill("Saturday / Суббота");
+  await page.getByLabel("Allow prefilling from a link").check();
   const path = await publishFromEditor(page);
   await page.reload();
   await expect(language).toHaveValue("ru");
 
   const hosted = await context.newPage();
   await hosted.setViewportSize({ width: 390, height: 844 });
-  await hosted.goto(path);
+  const prefilledPath = `${path}?prefill=slot%3Aoption_1`;
+  await hosted.goto(prefilledPath);
   const embedPage = await context.newPage();
-  const frame = await openEmbeddedForm(embedPage, path);
+  const frame = await openEmbeddedForm(embedPage, prefilledPath);
   for (const surface of [hosted, frame]) {
     await expect(surface.getByRole("heading", { name: title })).toBeVisible();
     await expect(surface.locator("form")).toHaveAttribute("lang", "ru");
@@ -881,6 +1034,8 @@ test("publishes Russian system text on both surfaces and keeps the open version 
     await expect(
       surface.getByLabel("Сеанс").locator('option[value="option_1"]'),
     ).toHaveText("Saturday / Суббота");
+    await expect(surface.getByLabel("Сеанс")).toHaveValue("option_1");
+    await expect(surface.getByText(/Ответ подставлен из ссылки/)).toBeVisible();
     await expect(
       surface.getByLabel("Сохранять ответы на этом устройстве"),
     ).toBeVisible();
@@ -970,6 +1125,7 @@ test("publishes Russian system text on both surfaces and keeps the open version 
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download saved draft" }).click();
   const raw = await readFile(await (await download).path(), "utf8");
+  expect(JSON.parse(raw).form.fields[1]).toMatchObject({ allowPrefill: true });
   expect(JSON.parse(raw).form.settings).toMatchObject({
     language: "ru",
     successMessage: completion,
@@ -1007,9 +1163,11 @@ test("publishes Russian system text on both surfaces and keeps the open version 
   await selectTemplate(page, raw);
   await page.getByRole("button", { name: "Create draft" }).click();
   await expect(language).toHaveValue("ru");
+  await expect(page.getByLabel("Allow prefilling from a link")).toBeChecked();
   const imported = await publishFromEditor(page);
   expect(imported).not.toBe(path);
-  await hosted.goto(imported);
+  await hosted.goto(`${imported}?prefill=slot%3Aoption_1`);
+  await expect(hosted.getByLabel("Сеанс")).toHaveValue("option_1");
   await expect(
     hosted.getByLabel("Сеанс").locator('option[value=""]'),
   ).toHaveText("Выберите вариант");
@@ -1086,9 +1244,16 @@ test("rejects an unsupported template language and publishes older templates in 
   );
   await page.getByRole("button", { name: "Create draft" }).click();
   await expect(page.getByLabel("Form language")).toHaveValue("en");
+  await expect(
+    page.getByLabel("Allow prefilling from a link"),
+  ).not.toBeChecked();
   const path = await publishFromEditor(page);
-  await page.goto(path);
+  await expect(
+    page.getByRole("heading", { name: "Prefilled links" }),
+  ).toHaveCount(0);
+  await page.goto(`${path}?prefill=choice%3Aoption`);
   await expect(page.locator("form")).toHaveAttribute("lang", "en");
+  await expect(page.getByLabel("Choice")).toHaveValue("");
   await expect(
     page.getByLabel("Choice").locator('option[value=""]'),
   ).toHaveText("Select an option");

@@ -6,6 +6,11 @@ You can place a published form on another site with an iframe. The form editor
 provides a ready-to-copy snippet. Add `?embed=1` to the hosted form URL to use the
 compact iframe layout.
 
+To embed a [prefilled form](user-guide.md#prefilled-links), use the copied link
+as the iframe's `src` and append `&amp;embed=1` in HTML. For example,
+`src="https://forms.example.org/f/registration?prefill=meeting%3Aworkshop&amp;embed=1"`.
+The same link works with automatic height. Respondents can change the selection.
+
 ## Plain iframe
 
 A plain iframe needs no script and keeps the height you set:

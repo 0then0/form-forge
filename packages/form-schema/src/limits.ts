@@ -3,3 +3,5 @@ export const MAX_SHORT_TEXT_LENGTH = 10_000;
 export const MAX_LONG_TEXT_LENGTH = 10_000;
 export const MAX_EMAIL_LENGTH = 320;
 export const MAX_SUBMISSION_TEXT_LENGTH = 64_000;
+export const MAX_FIELD_KEY_LENGTH = 64;
+export const MAX_SELECT_OPTION_VALUE_LENGTH = 120;

@@ -28,6 +28,7 @@ export type FormRendererProps = {
   onSubmit: (values: NormalizedSubmission) => Promise<void> | void;
   components?: Partial<RendererComponents>;
   disabled?: boolean;
+  initialSelect?: { fieldKey: string; value: string } | undefined;
   restoreAnswers?: { revision: string; answers: unknown } | undefined;
   onAnswersChange?: ((answers: NormalizedSubmission) => void) | undefined;
   onRestoreResult?: ((result: { droppedKeys: string[] }) => void) | undefined;
@@ -71,6 +72,7 @@ const getServerFieldErrors = (
 export const FormRenderer = ({
   components,
   disabled = false,
+  initialSelect,
   onSubmit,
   onAnswersChange,
   onRestoreResult,
@@ -83,6 +85,7 @@ export const FormRenderer = ({
     () => ({ ...defaultRendererComponents, ...components }),
     [components],
   );
+  const [prefill] = useState(initialSelect);
   const [serverError, setServerError] = useState<string>();
   const {
     clearErrors,
@@ -94,7 +97,7 @@ export const FormRenderer = ({
     setError,
     setValue,
   } = useForm<FormValues>({
-    defaultValues: {},
+    defaultValues: prefill ? { [prefill.fieldKey]: prefill.value } : {},
     mode: "all",
     shouldUnregister: true,
     resolver: (values) => {
@@ -120,6 +123,12 @@ export const FormRenderer = ({
   const restoredRevision = useRef<string | undefined>(undefined);
   const lastObservedAnswers = useRef<string | undefined>(undefined);
   const restoring = useRef(false);
+
+  useEffect(() => {
+    // Seed the first render, then keep only the live answer. Resume and
+    // conditional unmounts can clear it without reviving a default.
+    if (prefill) reset({}, { keepValues: true });
+  }, [prefill, reset]);
 
   useEffect(() => {
     if (!restoreAnswers || restoredRevision.current === restoreAnswers.revision)
@@ -198,17 +207,25 @@ export const FormRenderer = ({
     <form lang={language} onSubmit={(event) => void submit(event)} noValidate>
       <ui.ErrorSummary errors={errorMessages} heading={messages.errorSummary} />
       <div data-form-fields>
-        {visibleFields.map((field) => (
-          <RenderedField
-            key={field.id}
-            components={ui}
-            disabled={disabled || isSubmitting}
-            error={getFieldError(errors, field.key)}
-            field={field}
-            register={register}
-            selectOption={messages.selectOption}
-          />
-        ))}
+        {visibleFields.map((field) => {
+          const value = watched[field.key];
+          return (
+            <RenderedField
+              key={field.id}
+              components={ui}
+              defaultSelectValue={
+                field.key === prefill?.fieldKey && typeof value === "string"
+                  ? value
+                  : undefined
+              }
+              disabled={disabled || isSubmitting}
+              error={getFieldError(errors, field.key)}
+              field={field}
+              register={register}
+              selectOption={messages.selectOption}
+            />
+          );
+        })}
       </div>
       <ui.SubmitButton type="submit" disabled={disabled || isSubmitting}>
         {isSubmitting ? messages.submitting : schema.settings.submitLabel}
@@ -219,6 +236,7 @@ export const FormRenderer = ({
 
 type RenderedFieldProps = {
   components: RendererComponents;
+  defaultSelectValue?: string | undefined;
   disabled: boolean;
   error?: string | undefined;
   field: FormField;
@@ -228,6 +246,7 @@ type RenderedFieldProps = {
 
 const RenderedField = ({
   components,
+  defaultSelectValue,
   disabled,
   error,
   field,
@@ -269,7 +288,11 @@ const RenderedField = ({
       break;
     case "select":
       control = (
-        <components.Select {...common} {...registration}>
+        <components.Select
+          {...common}
+          {...registration}
+          defaultValue={defaultSelectValue}
+        >
           <option value="">{field.placeholder ?? selectOption}</option>
           {field.options.map((option) => (
             <option key={option.value} value={option.value}>

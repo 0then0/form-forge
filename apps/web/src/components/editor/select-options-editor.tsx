@@ -1,6 +1,9 @@
 "use client";
 
-import type { FormSchemaV1 } from "@form-forge/form-schema";
+import {
+  MAX_SELECT_OPTION_VALUE_LENGTH,
+  type FormSchemaV1,
+} from "@form-forge/form-schema";
 import { Button, Input, Label } from "@form-forge/ui";
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 import { useFieldArray, useWatch, type UseFormReturn } from "react-hook-form";
@@ -20,6 +23,8 @@ export const SelectOptionsEditor = ({
     name,
   });
   const options = useWatch({ control: form.control, name }) ?? [];
+  const prefillName = `fields.${index}.allowPrefill` as const;
+  const allowPrefill = useWatch({ control: form.control, name: prefillName });
   const errors = options.map((option) =>
     !option.label.trim() || !option.value.trim()
       ? "Enter a label and value for every option."
@@ -54,7 +59,7 @@ export const SelectOptionsEditor = ({
               </Label>
               <Input
                 id={`${name}-${optionIndex}-value`}
-                maxLength={120}
+                maxLength={MAX_SELECT_OPTION_VALUE_LENGTH}
                 aria-invalid={!!errors[optionIndex]}
                 {...form.register(`${name}.${optionIndex}.value`)}
               />
@@ -112,6 +117,25 @@ export const SelectOptionsEditor = ({
       >
         <Plus className="size-4" /> Add option
       </Button>
+      <div className="space-y-1">
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <Input
+            type="checkbox"
+            checked={allowPrefill === true}
+            aria-describedby={`${name}-prefill-help`}
+            onChange={(event) =>
+              form.setValue(prefillName, event.currentTarget.checked, {
+                shouldDirty: true,
+              })
+            }
+          />
+          Allow prefilling from a link
+        </label>
+        <p id={`${name}-prefill-help`} className="text-xs text-slate-500">
+          Use public option values such as meeting names. The field must be
+          visible when the form opens.
+        </p>
+      </div>
     </fieldset>
   );
 };

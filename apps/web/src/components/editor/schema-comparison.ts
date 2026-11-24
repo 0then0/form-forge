@@ -9,6 +9,9 @@ const normalizeSchemaForComparison = (schema: FormSchemaV1) => ({
     ...("placeholder" in field
       ? { placeholder: field.placeholder || undefined }
       : {}),
+    ...(field.type === "select"
+      ? { allowPrefill: field.allowPrefill || undefined }
+      : {}),
     webhookKey: field.webhookKey || undefined,
   })),
 });

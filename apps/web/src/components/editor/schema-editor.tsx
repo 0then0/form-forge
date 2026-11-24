@@ -18,6 +18,7 @@ import { EditorHeader } from "./editor-header";
 import { ExportTemplateButton } from "./export-template-button";
 import { FieldsEditor } from "./fields-editor";
 import { FormSettings } from "./form-settings";
+import { PrefilledLinks } from "./prefilled-links";
 import { PreviewErrorBoundary } from "./preview-error-boundary";
 import { SchemaPreview } from "./schema-preview";
 import { useUnsavedChangesWarning } from "./use-unsaved-changes-warning";
@@ -375,6 +376,7 @@ const EditorSidebar = ({
   const deferredSchema = useDeferredValue(schema);
   const parsedSchema = formSchemaV1Schema.safeParse(deferredSchema);
   const serializedSchema = JSON.stringify(deferredSchema);
+  const publishedVersion = published ? versions[0] : undefined;
 
   return (
     <aside
@@ -382,6 +384,13 @@ const EditorSidebar = ({
       className="min-w-0 xl:sticky xl:top-6 xl:max-h-[calc(100dvh-3rem)] xl:self-start xl:overflow-y-auto xl:overscroll-contain xl:pr-2"
     >
       <div className="space-y-5">
+        {publishedVersion ? (
+          <PrefilledLinks
+            key={`prefill-${publishedVersion.id}`}
+            publicUrl={`${publicBaseUrl}/f/${publicSlug}`}
+            schema={publishedVersion.schema}
+          />
+        ) : null}
         <PreviewErrorBoundary resetKey={serializedSchema}>
           <SchemaPreview result={parsedSchema} draft={deferredSchema} />
         </PreviewErrorBoundary>

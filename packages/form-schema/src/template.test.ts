@@ -16,6 +16,7 @@ const form: FormSchemaV1 = {
       id: "11111111-1111-4111-8111-111111111111",
       key: "ticket",
       label: "Ticket",
+      allowPrefill: true,
       required: true,
       type: "select",
       width: "full",
@@ -70,7 +71,7 @@ describe("form templates", () => {
     });
   });
 
-  it("round-trips language, identifiers, order, options and conditional references", () => {
+  it("round-trips prefill permission, language, identifiers, order, options and conditional references", () => {
     const result = roundTrip(createFormTemplate(form));
     expect(result).toEqual({
       success: true,

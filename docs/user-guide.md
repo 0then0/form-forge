@@ -32,6 +32,33 @@ saved. The editor starts with **Submit**, **Thank you** and an English success
 message as editable form text. Replace these values in the editor when you want
 different wording.
 
+### Prefilled links
+
+Use prefilled links to share one registration form for several meetings. In
+the editor, select **Allow prefilling from a link** on a select field and publish
+the form. The field must be visible when the form opens with no answers.
+
+In **Prefilled links**, choose an option, then select **Copy link**. If several
+fields allow prefilling, choose the field first. The choices come from the
+published version, even while you edit or save a different draft. Create one
+link per meeting. The option value is visible in the URL, so use public values
+such as meeting names or codes. Respondents can change the answer before
+submitting.
+
+A new visit uses the current published version. If the field key changes,
+prefilling is disabled, or the option value is removed, the old link opens the
+form with an empty selection. If a respondent chooses **Resume**, their saved
+answers replace the initial selection, including an empty saved selection.
+
+To construct a link, set one `prefill` query parameter to the field key, a
+colon, and the saved option value. For example,
+`/f/registration?prefill=meeting%3Aworkshop` selects the option with value
+`workshop` in the field with key `meeting`. Use `URLSearchParams` to encode the
+parameter, including Unicode and characters such as `+`, `&` and `#`. The first
+colon separates the key from the value. The decoded key and value can be up to
+64 and 120 UTF-16 code units respectively. Duplicate or invalid parameters are
+ignored. For iframe links, add `embed=1` as a separate parameter.
+
 ## Form templates
 
 A form template is a JSON file that carries a form definition to another
@@ -45,8 +72,9 @@ the draft after you opened it, reload the editor before exporting.
 The file contains a format identifier, a format version and the form definition:
 title, description, fields in their order, select options in their order, field
 identifiers and keys, webhook keys, validation, conditional visibility, layout,
-form language, submit label and success text. Older templates without a language
-import in English. `formatVersion` describes the file and
+prefill permission, form language, submit label and success text. Older
+templates without a language import in English. Prefill permission is off in
+templates that omit it. `formatVersion` describes the file and
 `form.schemaVersion` describes the definition; both must be supported by the
 installation that imports the file. A template never contains responses,
 respondent drafts, users, roles, intake and privacy settings, publication

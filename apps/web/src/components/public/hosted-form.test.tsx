@@ -32,6 +32,75 @@ describe("HostedForm", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps edited answers and their version when query navigation delivers new props", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: { submissionId: "accepted" } }), {
+        status: 201,
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup();
+    const openedSchema: FormSchemaV1 = {
+      ...schema,
+      fields: [
+        ...schema.fields,
+        {
+          id: "22222222-2222-4222-8222-222222222222",
+          key: "meeting",
+          label: "Meeting",
+          required: false,
+          width: "full",
+          type: "select",
+          allowPrefill: true,
+          options: [
+            { label: "Workshop", value: "workshop" },
+            { label: "Evening", value: "evening" },
+          ],
+        },
+      ],
+    };
+    const { rerender } = render(
+      <HostedForm
+        compact
+        prefill={{ fieldKey: "meeting", value: "workshop" }}
+        schema={openedSchema}
+        slug="contact"
+        versionId="opened-version"
+      />,
+    );
+    const meeting = screen.getByLabelText("Meeting");
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Ada");
+    await user.selectOptions(meeting, "evening");
+
+    rerender(
+      <HostedForm schema={schema} slug="contact" versionId="new-version" />,
+    );
+    expect(meeting).toBeInTheDocument();
+    expect(meeting).toHaveValue("evening");
+    rerender(
+      <HostedForm
+        closedMessage="Paused"
+        schema={schema}
+        slug="contact"
+        versionId="new-version"
+      />,
+    );
+    expect(screen.getByText("Paused")).toBeVisible();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    rerender(
+      <HostedForm schema={schema} slug="contact" versionId="new-version" />,
+    );
+    expect(screen.getByRole("combobox", { name: "Meeting" })).toHaveValue(
+      "evening",
+    );
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await screen.findByRole("status");
+    expect(JSON.parse(fetch.mock.calls[0]?.[1].body)).toMatchObject({
+      values: { name: "Ada", meeting: "evening" },
+      versionId: "opened-version",
+    });
+  });
+
   it("submits without visitor metadata when localStorage is unavailable", async () => {
     vi.stubGlobal("matchMedia", () => ({
       addEventListener: vi.fn(),
