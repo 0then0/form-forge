@@ -1,22 +1,17 @@
-# 0.6.0
+# 0.7.0
 
-Choose English or Russian for each published form. Hosted and embedded forms use
-the same language for validation, local drafts, submission retries and default
-closed messages. Saved author text is displayed as written. Form templates carry
-the language setting, and older definitions default to English. The submission
-API includes stable field error codes alongside its English messages.
+Authors can share links that preselect one option from an enabled select field
+in a published form. Hosted and embedded forms let respondents change the
+selection. Resuming a saved response restores its own answers.
 
-## Upgrade from 0.5.0
+## Upgrade from 0.6.0
 
 Back up your installation and keys, then follow the
-[installation guide](README.md) to update the source, apply migrations and
-rebuild the images. Migration `0007_default_closed_message` changes the database
-default for new forms. It preserves existing closed messages. No new environment
-variables are required.
-
-Older application versions reject definitions and templates that contain the
-language setting. For a rollback with those definitions, restore the
-pre-upgrade backup and follow the [verification guide](VERIFICATION.md).
+[installation guide](README.md) to update the source and rebuild the images.
+This release uses the existing database schema and environment settings.
+The enabled field setting is stored in published definitions and templates.
+To roll back to an application version that predates the setting, restore
+the pre-upgrade backup and follow the [verification guide](VERIFICATION.md).
 
 ## Verification
 
